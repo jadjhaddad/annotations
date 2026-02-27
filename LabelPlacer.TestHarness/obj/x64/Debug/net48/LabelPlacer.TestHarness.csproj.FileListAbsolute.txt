@@ -1,0 +1,13 @@
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/bin/x64/Debug/net48/LabelPlacer.TestHarness.exe.config
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/bin/x64/Debug/net48/LabelPlacer.TestHarness.exe
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/bin/x64/Debug/net48/LabelPlacer.TestHarness.pdb
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/bin/x64/Debug/net48/LabelPlacer.dll
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/bin/x64/Debug/net48/LabelPlacer.pdb
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.csproj.AssemblyReference.cache
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.GeneratedMSBuildEditorConfig.editorconfig
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.AssemblyInfoInputs.cache
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.AssemblyInfo.cs
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.csproj.CoreCompileInputs.cache
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPla.3CB2324F.Up2Date
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.exe
+/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/obj/x64/Debug/net48/LabelPlacer.TestHarness.pdb

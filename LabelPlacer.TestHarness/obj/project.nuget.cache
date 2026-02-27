@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "D2ha+kqtwy8=",
+  "success": true,
+  "projectFilePath": "/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer.TestHarness/LabelPlacer.TestHarness.csproj",
+  "expectedPackageFiles": [
+    "/root/.nuget/packages/microsoft.netframework.referenceassemblies/1.0.3/microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
+    "/root/.nuget/packages/microsoft.netframework.referenceassemblies.net48/1.0.3/microsoft.netframework.referenceassemblies.net48.1.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}
