@@ -42,6 +42,8 @@ static class Program
         }
 
         RunIf("sparse",  filter, Sparse);
+        RunIf("collinear", filter, Collinear);
+        RunIf("survey", filter, SurveyLike);
         RunIf("cluster", filter, Cluster);
         RunIf("dense",   filter, Dense);
         RunIf("mixed",   filter, Mixed);
@@ -129,7 +131,7 @@ static class Program
         }
 
         RunAndReport(labels, cfg, seed: 1);
-        AssertZeroOverlap(labels, "Sparse");
+        AssertZeroOverlap(labels, "Sparse", cfg);
     }
 
     static void Cluster()
@@ -151,12 +153,113 @@ static class Program
                     Console.WriteLine($"  [AUDIT] iter={iter,6}  running={running,16:F4}  true={trueE,16:F4}  drift={drift,16:F6}");
             });
 
-        AssertZeroOverlap(labels, "Cluster");
+        AssertZeroOverlap(labels, "Cluster", cfg);
+    }
+
+    static void Collinear()
+    {
+        var cfg = new PlacerConfig
+        {
+            CoolingRate = 0.9995,
+            StagnationIterations = 20000,
+            Alpha = 6000.0,
+            AlphaStageB = 5000.0,
+            BetaY = 50.0,
+            BetaYStageB = 200.0,
+            MaxBlockDisplacementFactor = 5.0,
+        };
+        var labels = new List<LabelState>();
+
+        double[] xs = { 0.0, 5.0 };
+        double[] ys = { 0.0, 4.0, 8.0 };
+
+        int id = 1;
+        foreach (double y in ys)
+        foreach (double x in xs)
+        {
+            labels.Add(MakeLabel($"P{id}-A", x, y, width: 6.0, height: 1.5, cfg));
+            labels.Add(MakeLabel($"P{id}-B", x, y, width: 6.0, height: 1.5, cfg));
+            if (id % 3 != 0)
+                labels.Add(MakeLabel($"P{id}-C", x, y, width: 6.0, height: 1.5, cfg));
+            id++;
+        }
+
+        RunAndReport(labels, cfg, seed: 6, verbose: true);
+        AssertZeroOverlap(labels, "Collinear", cfg);
+    }
+
+    static void SurveyLike()
+    {
+        var cfg = new PlacerConfig
+        {
+            CoolingRate = 0.9995,
+            StagnationIterations = 20000,
+            Alpha = 6000.0,
+            AlphaStageB = 5000.0,
+            BetaY = 50.0,
+            BetaYStageB = 200.0,
+            MaxBlockDisplacementFactor = 5.0,
+        };
+
+        var labels = new List<LabelState>();
+
+        (double x, double y, string text)[] pts =
+        {
+            (0.0, 48.0, "95.94"),
+            (1.2, 46.8, "95.84"),
+            (2.6, 45.6, "95.99"),
+            (3.8, 43.8, "95.83"),
+            (1.6, 38.5, "95.13"),
+            (2.4, 37.2, "95.82"),
+            (3.2, 36.2, "95.25"),
+            (2.8, 34.0, "95.82"),
+
+            (1.4, 28.6, "94.46"),
+            (2.2, 27.8, "93.81"),
+            (3.6, 26.6, "95.53"),
+            (3.0, 24.5, "95.81"),
+
+            (1.8, 18.6, "93.80"),
+            (3.8, 18.2, "95.80"),
+            (2.2, 17.4, "94.76"),
+            (4.6, 16.2, "95.80"),
+
+            (9.5, 15.8, "95.09"),
+            (11.0, 15.0, "95.09"),
+            (12.5, 14.6, "95.09"),
+            (14.2, 14.2, "95.09"),
+
+            (9.0, 12.2, "94.98"),
+            (9.8, 11.4, "93.09"),
+            (13.5, 11.0, "95.09"),
+            (16.0, 10.6, "95.09"),
+
+            (6.0, 8.2, "95.81"),
+            (8.0, 7.8, "95.81"),
+            (10.0, 7.4, "95.81"),
+            (12.5, 7.0, "95.81"),
+            (15.5, 6.6, "95.81"),
+
+            (22.0, 12.0, "95.09"),
+            (24.0, 11.2, "95.09"),
+            (26.5, 10.6, "95.09"),
+            (28.5, 9.8, "95.09"),
+            (30.0, 9.0, "95.81"),
+            (32.0, 8.4, "95.81"),
+        };
+
+        foreach (var p in pts)
+            labels.Add(MakeLabel(p.text, p.x, p.y, width: 6.0, height: 1.5, cfg));
+
+        RunAndReport(labels, cfg, seed: 7, verbose: true);
+        AssertZeroOverlap(labels, "SurveyLike", cfg);
     }
 
     static void Dense()
     {
-        var cfg    = new PlacerConfig { CoolingRate = 0.9998, StagnationIterations = 15000 };
+        var cfg    = new PlacerConfig { CoolingRate = 0.9998, StagnationIterations = 15000,
+                                        Alpha = 6000, AlphaStageB = 5000,
+                                        Gamma = 0, CoincidenceFactor = 0 };
         var labels = new List<LabelState>();
         var rng    = new Random(3);
 
@@ -179,7 +282,7 @@ static class Program
 
     static void Mixed()
     {
-        var cfg    = new PlacerConfig { CoolingRate = 0.9997 };
+        var cfg    = new PlacerConfig { CoolingRate = 0.9997, Alpha = 3000, AlphaStageB = 2500 };
         var labels = new List<LabelState>();
         var rng    = new Random(4);
 
@@ -206,6 +309,8 @@ static class Program
             CoolingRate          = 0.9999,
             StagnationIterations = 30000,
             Alpha                = 1000,
+            Gamma                = 0,
+            CoincidenceFactor    = 0,
         };
         var labels = new List<LabelState>();
         var rng    = new Random(5);
@@ -218,7 +323,7 @@ static class Program
         }
 
         Console.WriteLine($"  {labels.Count} labels in 50×50 region");
-        PrintInitialDiagnostics(labels);
+        PrintInitialDiagnostics(labels, cfg);
         RunAndReport(labels, cfg, seed: 5, verbose: true);
     }
 
@@ -238,6 +343,17 @@ static class Program
             sizeSource: LabelSizeSource.Estimated);
     }
 
+    static LabelState MakeLabel(string text, double ax, double ay,
+                                double width, double height, PlacerConfig cfg)
+    {
+        return new LabelState(
+            handle:     text,
+            anchor:     new Point2D(ax, ay),
+            width:      width,
+            height:     height,
+            sizeSource: LabelSizeSource.Estimated);
+    }
+
     static void RunAndReport(
         List<LabelState> labels, PlacerConfig cfg, int seed,
         bool verbose = false,
@@ -245,12 +361,16 @@ static class Program
         Action<int, double, double, double>? onAudit = null)
     {
         Console.WriteLine($"  {labels.Count} labels");
-        PrintInitialDiagnostics(labels);
+        PrintInitialDiagnostics(labels, cfg);
 
         if (SnapshotWriter != null)
             WriteSnapshot("start", 0, labels);
 
         var loop = new SALoop { ProgressInterval = 500 };
+
+        // Step 2 — print T₀ and target acceptance immediately after warmup.
+        loop.OnWarmupComplete = (t0, targetAccept) =>
+            Console.WriteLine($"  T0={t0,14:F2}  target_accept={targetAccept * 100.0:F0}%");
 
         Action<SAIterationLog>? iterCb = null;
 
@@ -293,8 +413,21 @@ static class Program
 
         if (verbose)
         {
-            loop.OnProgress = (iter, temp, energy, overlap) =>
-                Console.WriteLine($"  iter={iter,8:N0}  T={temp,10:F6}  E={energy,14:F2}  overlap={overlap,10:F4}");
+            loop.OnProgressDetailed = (r) =>
+            {
+                double total = r.Energy;
+                string pct(double v) => total > 0 ? $"({v / total * 100.0,4:F0}%)" : "     ";
+                string stage = r.InStageB ? "B" : "A";
+                Console.WriteLine(
+                    $"  iter={r.Iteration,8:N0}  T={r.Temperature,12:F2}" +
+                    $"  E={total,12:F2}" +
+                    $"  ovlp={r.OverlapComponent,11:F2}{pct(r.OverlapComponent)}" +
+                    $"  disp={r.DisplacementComponent,9:F2}{pct(r.DisplacementComponent)}" +
+                    $"  sprd={r.SpreadComponent,8:F2}{pct(r.SpreadComponent)}" +
+                    $"  acc={r.AcceptanceRate * 100.0,5:F1}%" +
+                    $"  pairs={r.OverlapPairs,4}" +
+                    $"  [{stage}]");
+            };
         }
 
         if (auditInterval > 0 && onAudit != null)
@@ -324,16 +457,20 @@ static class Program
         Console.WriteLine($"  SA time      : {sw.ElapsedMilliseconds} ms");
     }
 
-    static void PrintInitialDiagnostics(List<LabelState> labels)
+    static void PrintInitialDiagnostics(List<LabelState> labels, PlacerConfig cfg)
     {
         foreach (var ls in labels) ls.CurrentOffset = Vector2D.Zero;
-        var (area, pairs, maxP) = EnergyDelta.OverlapDiagnostics(labels);
+        var (area, pairs, maxP) = cfg.StackLabelsByAnchor
+            ? EnergyDelta.OverlapDiagnosticsIgnoreSameAnchor(labels)
+            : EnergyDelta.OverlapDiagnostics(labels);
         Console.WriteLine($"  Initial overlap — area={area:F4}  pairs={pairs}  max={maxP:F4}");
     }
 
-    static void AssertZeroOverlap(List<LabelState> labels, string scenarioName)
+    static void AssertZeroOverlap(List<LabelState> labels, string scenarioName, PlacerConfig cfg)
     {
-        var (area, pairs, _) = EnergyDelta.OverlapDiagnostics(labels);
+        var (area, pairs, _) = cfg.StackLabelsByAnchor
+            ? EnergyDelta.OverlapDiagnosticsIgnoreSameAnchor(labels)
+            : EnergyDelta.OverlapDiagnostics(labels);
         string status = (area < 1e-9) ? "PASS" : $"FAIL (area={area:F6}, pairs={pairs})";
         Console.WriteLine($"  Zero-overlap assertion: {status}");
     }

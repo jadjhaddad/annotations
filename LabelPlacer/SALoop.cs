@@ -91,6 +91,46 @@ public readonly struct SAIterationLog
 }
 
 // ---------------------------------------------------------------------------
+// Detailed progress report (fired every ProgressInterval iterations)
+// ---------------------------------------------------------------------------
+
+public readonly struct SAProgressReport
+{
+    public int Iteration { get; }
+    public double Temperature { get; }
+    public double Energy { get; }
+    public double OverlapComponent { get; }      // alpha × total overlap area
+    public double DisplacementComponent { get; }
+    public double SpreadComponent { get; }
+    public double OverlapArea { get; }
+    public int OverlapPairs { get; }
+    public int AcceptedInWindow { get; }
+    public int WindowSize { get; }
+    public bool InStageB { get; }
+
+    public double AcceptanceRate => WindowSize > 0 ? (double)AcceptedInWindow / WindowSize : 0.0;
+
+    public SAProgressReport(
+        int iteration, double temperature, double energy,
+        double overlapComponent, double displacementComponent, double spreadComponent,
+        double overlapArea, int overlapPairs,
+        int acceptedInWindow, int windowSize, bool inStageB)
+    {
+        Iteration = iteration;
+        Temperature = temperature;
+        Energy = energy;
+        OverlapComponent = overlapComponent;
+        DisplacementComponent = displacementComponent;
+        SpreadComponent = spreadComponent;
+        OverlapArea = overlapArea;
+        OverlapPairs = overlapPairs;
+        AcceptedInWindow = acceptedInWindow;
+        WindowSize = windowSize;
+        InStageB = inStageB;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SA loop
 // ---------------------------------------------------------------------------
 
@@ -102,8 +142,24 @@ public sealed class SALoop
     /// </summary>
     public Action<int, double, double, double>? OnProgress { get; set; }
 
+    /// <summary>
+    /// Called every <see cref="ProgressInterval"/> iterations with full energy breakdown
+    /// and window acceptance rate. Slightly more expensive than <see cref="OnProgress"/>
+    /// (two extra O(n) passes for disp and spread components).
+    /// </summary>
+    public Action<SAProgressReport>? OnProgressDetailed { get; set; }
+
     /// <summary>How often to invoke <see cref="OnProgress"/> (and check Stage B transition).</summary>
     public int ProgressInterval { get; set; } = 500;
+
+    /// <summary>T₀ computed by the last warmup pass. Readable after Run() returns.</summary>
+    public double LastT0 { get; private set; }
+
+    /// <summary>
+    /// Fired immediately after the warmup pass, before the main loop.
+    /// Args: (t0, warmupTargetAcceptance) — use to validate ~80% initial acceptance.
+    /// </summary>
+    public Action<double, double>? OnWarmupComplete { get; set; }
 
     /// <summary>
     /// When > 0, recomputes global energy from scratch every this many iterations and
@@ -136,6 +192,19 @@ public sealed class SALoop
 
     public SAResult Run(List<LabelState> labels, PlacerConfig cfg, Random? rng = null)
     {
+        if (cfg.StackLabelsByAnchor)
+            return RunStackedByAnchor(labels, cfg, rng);
+
+        return RunInternal(labels, cfg, rng);
+    }
+
+    private SAResult RunInternal(
+        List<LabelState> labels,
+        PlacerConfig cfg,
+        Random? rng = null,
+        double[]? maxAbsY = null,
+        int[]? anchorOrder = null)
+    {
         if (labels.Count == 0)
             return new SAResult(Array.Empty<Vector2D>(), 0, 0, 0, true, false, 0, 0, 0);
 
@@ -150,12 +219,16 @@ public sealed class SALoop
         SpatialGrid grid = new SpatialGrid(cellSize);
         for (int i = 0; i < labels.Count; i++) grid.Insert(i, labels[i]);
 
-        // --- 3. Initial energy ---
+        // --- 3. Initial energy (ordering term is zero at cold start since all offsets = 0) ---
         double energy = EnergyDelta.ComputeGlobal(labels, groups, cfg);
         double initialEnergy = energy;
 
         // --- 4. Warmup → T₀ ---
-        double t0 = DetermineT0(labels, grid, groups, cfg, rng);
+        double[] maxAbsYLocal = maxAbsY ?? BuildMaxAbsY(labels, cfg);
+
+        double t0 = DetermineT0(labels, grid, groups, cfg, rng, maxAbsYLocal);
+        LastT0 = t0;
+        OnWarmupComplete?.Invoke(t0, cfg.WarmupTargetAcceptance);
         double temp = t0;
 
         // --- 5. Stage B config (different weights, same everything else) ---
@@ -184,6 +257,18 @@ public sealed class SALoop
         bool stagnationStop = false;
         int itersSinceBest = 0;
         int iter = 0;
+        int windowAccepted = 0;  // accepted moves since last progress checkpoint
+        int windowIter    = 0;  // total iterations since last progress checkpoint
+
+        // Precompute reverse rank lookup for soft ordering penalty (stacked mode).
+        // rankOf[labelIndex] = position in anchorOrder array, used for O(1) pair lookup.
+        int[]? rankOf = null;
+        if (anchorOrder != null && anchorOrder.Length > 1)
+        {
+            rankOf = new int[labels.Count];
+            for (int k = 0; k < anchorOrder.Length; k++)
+                rankOf[anchorOrder[k]] = k;
+        }
 
         // -----------------------------------------------------------------------
         // Main SA loop
@@ -225,14 +310,14 @@ public sealed class SALoop
                 {
                     isSwap = true;
                     moveKind = SAMoveKind.Swap;
-                    newOffI = labels[swapJ].CurrentOffset;  // i takes j's offset
-                    newOffJ = label.CurrentOffset;           // j takes i's offset
+                    newOffI = new Vector2D(0.0, labels[swapJ].CurrentOffset.Y);  // i takes j's Y offset
+                    newOffJ = new Vector2D(0.0, label.CurrentOffset.Y);          // j takes i's Y offset
                 }
             }
 
             // --- Clamp absolute Y ---
-            newOffI = ClampY(newOffI, label.MaxAbsoluteY(cfg));
-            if (isSwap) newOffJ = ClampY(newOffJ, labels[swapJ].MaxAbsoluteY(cfg));
+            newOffI = ClampY(new Vector2D(0.0, newOffI.Y), maxAbsYLocal[idx]);
+            if (isSwap) newOffJ = ClampY(new Vector2D(0.0, newOffJ.Y), maxAbsYLocal[swapJ]);
 
             // --- Build deduplicated neighbor list ---
             Rect2D oldRectI = label.GetBoundingRect();
@@ -267,6 +352,13 @@ public sealed class SALoop
                 dE = SwapDelta(idx, swapJ, newOffI, newOffJ, labels, neighbors, groups, activeCfg);
             }
 
+            // --- Soft ordering penalty (stacked blocks only) ---
+            // Penalises moves that would cause block-center crossing (lower-anchor block
+            // drifting above higher-anchor block). SA can still accept such moves at high
+            // temperature (escapes deadlocks), but avoids them at low temperature.
+            if (rankOf != null)
+                dE += OrderingDelta(anchorOrder!, rankOf, labels, idx, newOffI, isSwap, swapJ, newOffJ, activeCfg);
+
             // --- Metropolis accept/reject ---
             bool accept = dE < 0.0 || rng.NextDouble() < Math.Exp(-dE / temp);
 
@@ -283,6 +375,8 @@ public sealed class SALoop
                     energy += dE;
                 }
 
+                windowAccepted++;
+
                 if (energy < bestEnergy)
                 {
                     bestEnergy = energy;
@@ -295,11 +389,12 @@ public sealed class SALoop
             temp *= cfg.CoolingRate;
             if (temp < cfg.MinTemp) temp = cfg.MinTemp;
             iter++;
+            windowIter++;
 
             // --- Periodic checks ---
             if (iter % ProgressInterval == 0)
             {
-                var (overlapArea, _, _) = EnergyDelta.OverlapDiagnostics(labels);
+                var (overlapArea, overlapPairs, _) = EnergyDelta.OverlapDiagnostics(labels);
 
                 // Stage B transition
                 if (!inStageB && overlapArea <= 0.0)
@@ -310,18 +405,36 @@ public sealed class SALoop
                     activeCfg = stageBCfg;
                     // Recompute energy with Stage B weights so bestEnergy is on the same scale.
                     energy = EnergyDelta.ComputeGlobal(labels, groups, activeCfg);
+                    if (rankOf != null)
+                        energy += OrderingEnergy(anchorOrder!, labels, activeCfg);
                     bestEnergy = energy;
                     bestOffsets = Snapshot(labels);
                     itersSinceBest = 0;
                 }
 
                 OnProgress?.Invoke(iter, temp, energy, overlapArea);
+
+                if (OnProgressDetailed != null)
+                {
+                    double dispComp   = EnergyDelta.ComputeDispComponent(labels, activeCfg);
+                    double spreadComp = EnergyDelta.ComputeSpreadComponent(groups, activeCfg);
+                    OnProgressDetailed(new SAProgressReport(
+                        iter, temp, energy,
+                        activeCfg.Alpha * overlapArea, dispComp, spreadComp,
+                        overlapArea, overlapPairs,
+                        windowAccepted, windowIter, inStageB));
+                }
+
+                windowAccepted = 0;
+                windowIter = 0;
             }
 
             // --- Energy audit ---
             if (AuditInterval > 0 && OnEnergyAudit != null && iter % AuditInterval == 0)
             {
                 double trueEnergy = EnergyDelta.ComputeGlobal(labels, groups, activeCfg);
+                if (rankOf != null)
+                    trueEnergy += OrderingEnergy(anchorOrder!, labels, activeCfg);
                 OnEnergyAudit(iter, energy, trueEnergy, energy - trueEnergy);
             }
 
@@ -360,13 +473,198 @@ public sealed class SALoop
             finalArea, finalPairs, finalMax);
     }
 
+    private readonly struct LabelBlock
+    {
+        public LabelState Block { get; }
+        public List<int> Members { get; }
+
+        public LabelBlock(LabelState block, List<int> members)
+        {
+            Block = block;
+            Members = members;
+        }
+    }
+
+    private SAResult RunStackedByAnchor(List<LabelState> labels, PlacerConfig cfg, Random? rng = null)
+    {
+        if (labels.Count == 0)
+            return new SAResult(Array.Empty<Vector2D>(), 0, 0, 0, true, false, 0, 0, 0);
+
+        // Cold start: all offsets to zero, then pre-stack labels per anchor.
+        foreach (LabelState ls in labels) ls.CurrentOffset = Vector2D.Zero;
+        Vector2D[] baseOffsets = ApplyAnchorStacks(labels);
+
+        List<LabelBlock> blocks = BuildAnchorBlocks(labels);
+        var blockLabels = new List<LabelState>(blocks.Count);
+        foreach (LabelBlock b in blocks) blockLabels.Add(b.Block);
+
+        // Always build anchor order — soft ordering penalty applies regardless of EnforceAnchorOrder.
+        int[] order = BuildAnchorOrder(blockLabels);
+
+        double blockMaxAbsY = ComputeBlockMaxAbsY(blockLabels, cfg);
+        var blockMaxAbsYs = new double[blockLabels.Count];
+        for (int i = 0; i < blockLabels.Count; i++) blockMaxAbsYs[i] = blockMaxAbsY;
+
+        SAResult blockResult = RunInternal(blockLabels, cfg, rng, blockMaxAbsYs, order);
+
+        // Apply block offsets to all member labels (stacked at the same anchor/offset).
+        foreach (LabelBlock block in blocks)
+        {
+            Vector2D off = block.Block.CurrentOffset;
+            foreach (int idx in block.Members)
+                labels[idx].CurrentOffset = new Vector2D(baseOffsets[idx].X + off.X, baseOffsets[idx].Y + off.Y);
+        }
+
+        Vector2D[] bestOffsets = Snapshot(labels);
+        var (finalArea, finalPairs, finalMax) = EnergyDelta.OverlapDiagnosticsIgnoreSameAnchor(labels);
+
+        return new SAResult(
+            bestOffsets, blockResult.BestEnergy, blockResult.InitialEnergy, blockResult.TotalIterations,
+            blockResult.ZeroOverlapReached, blockResult.StagnationStop,
+            finalArea, finalPairs, finalMax);
+    }
+
+    private static List<LabelBlock> BuildAnchorBlocks(List<LabelState> labels)
+    {
+        var buckets = new Dictionary<(double X, double Y), List<int>>();
+        for (int i = 0; i < labels.Count; i++)
+        {
+            LabelState ls = labels[i];
+            var key = (ls.Anchor.X, ls.Anchor.Y);
+            if (!buckets.TryGetValue(key, out List<int>? list))
+            {
+                list = new List<int>();
+                buckets[key] = list;
+            }
+            list.Add(i);
+        }
+
+        var blocks = new List<LabelBlock>(buckets.Count);
+        int blockId = 0;
+        foreach (List<int> members in buckets.Values)
+        {
+            double width = 0.0;
+            double height = 0.0;
+            LabelState first = labels[members[0]];
+            foreach (int idx in members)
+            {
+                LabelState ls = labels[idx];
+                if (ls.Width > width) width = ls.Width;
+                height += ls.Height;
+            }
+
+            var block = new LabelState(
+                $"Block-{blockId++}",
+                first.Anchor,
+                width,
+                height,
+                first.SizeSource);
+
+            blocks.Add(new LabelBlock(block, members));
+        }
+
+        return blocks;
+    }
+
+    private static int[] BuildAnchorOrder(List<LabelState> blockLabels)
+    {
+        int n = blockLabels.Count;
+        int[] order = new int[n];
+        for (int i = 0; i < n; i++) order[i] = i;
+        Array.Sort(order, (a, b) => blockLabels[a].Anchor.Y.CompareTo(blockLabels[b].Anchor.Y));
+        return order;
+    }
+
+    private static double ComputeBlockMaxAbsY(List<LabelState> blockLabels, PlacerConfig cfg)
+    {
+        var ys = new List<double>(blockLabels.Count);
+        double maxBlockH = 0.0;
+        double totalBlockH = 0.0;
+        foreach (LabelState ls in blockLabels)
+        {
+            ys.Add(ls.Anchor.Y);
+            totalBlockH += ls.Height;
+            if (ls.Height > maxBlockH) maxBlockH = ls.Height;
+        }
+        ys.Sort();
+
+        double minSpacing = 0.0;
+        for (int i = 1; i < ys.Count; i++)
+        {
+            double d = Math.Abs(ys[i] - ys[i - 1]);
+            if (d <= 0.0) continue;
+            if (minSpacing <= 0.0 || d < minSpacing) minSpacing = d;
+        }
+
+        double avgBlockH = blockLabels.Count > 0 ? totalBlockH / blockLabels.Count : maxBlockH;
+
+        // When anchor spacing is smaller than label height (labels denser than
+        // their own footprint), the spacing-based clamp is insufficient to let
+        // blocks clear each other. Fall back to the height-based clamp instead.
+        if (minSpacing <= 0.0 || minSpacing < avgBlockH * 0.5)
+            return cfg.MaxVerticalDisplacementFactor * maxBlockH;
+
+        // Normal case: anchors are well-separated. Use the larger of the
+        // anchor spacing and the block height as the unit, scaled by the factor.
+        return cfg.MaxBlockDisplacementFactor * Math.Max(minSpacing, avgBlockH);
+    }
+
+    private static double[] BuildMaxAbsY(List<LabelState> labels, PlacerConfig cfg)
+    {
+        var maxAbsY = new double[labels.Count];
+        for (int i = 0; i < labels.Count; i++)
+            maxAbsY[i] = labels[i].MaxAbsoluteY(cfg);
+        return maxAbsY;
+    }
+
+    private static Vector2D[] ApplyAnchorStacks(List<LabelState> labels)
+    {
+        var baseOffsets = new Vector2D[labels.Count];
+        var buckets = new Dictionary<(double X, double Y), List<int>>();
+        for (int i = 0; i < labels.Count; i++)
+        {
+            LabelState ls = labels[i];
+            var key = (ls.Anchor.X, ls.Anchor.Y);
+            if (!buckets.TryGetValue(key, out List<int>? list))
+            {
+                list = new List<int>();
+                buckets[key] = list;
+            }
+            list.Add(i);
+        }
+
+        foreach (List<int> members in buckets.Values)
+        {
+            // Deterministic order.
+            members.Sort();
+
+            double totalHeight = 0.0;
+            foreach (int idx in members) totalHeight += labels[idx].Height;
+
+            double y = totalHeight * 0.5;
+            foreach (int idx in members)
+            {
+                double h = labels[idx].Height;
+                y -= h * 0.5;
+                baseOffsets[idx] = new Vector2D(0.0, y);
+                y -= h * 0.5;
+            }
+        }
+
+        // Apply base offsets to labels.
+        for (int i = 0; i < labels.Count; i++)
+            labels[i].CurrentOffset = baseOffsets[i];
+
+        return baseOffsets;
+    }
+
     // -------------------------------------------------------------------------
     // Warmup — determine T₀
     // -------------------------------------------------------------------------
 
     private static double DetermineT0(
         List<LabelState> labels, SpatialGrid grid, GroupRegistry groups,
-        PlacerConfig cfg, Random rng)
+        PlacerConfig cfg, Random rng, double[] maxAbsY)
     {
         var uphillDeltas = new List<double>(cfg.WarmupSamples);
         var allAbsDeltas = new List<double>(cfg.WarmupSamples);
@@ -380,11 +678,10 @@ public sealed class SALoop
 
             // Use one full label diagonal as warmup step amplitude.
             double diag = LabelDiag(label);
-            double dx = (rng.NextDouble() * 2 - 1) * diag;
             double dy = (rng.NextDouble() * 2 - 1) * diag;
-            var off = new Vector2D(label.CurrentOffset.X + dx,
+            var off = new Vector2D(0.0,
                                        label.CurrentOffset.Y + dy);
-            off = ClampY(off, label.MaxAbsoluteY(cfg));
+            off = ClampY(off, maxAbsY[idx]);
 
             Rect2D old = label.GetBoundingRect();
             Rect2D nw = label.GetBoundingRectAt(off);
@@ -424,9 +721,8 @@ public sealed class SALoop
     private static Vector2D ProposeRandom(LabelState label, double temp, double t0, Random rng)
     {
         double scale = (temp / t0) * LabelDiag(label) * 2.0;
-        double dx = (rng.NextDouble() * 2 - 1) * scale;
         double dy = (rng.NextDouble() * 2 - 1) * scale;
-        return new Vector2D(label.CurrentOffset.X + dx, label.CurrentOffset.Y + dy);
+        return new Vector2D(0.0, label.CurrentOffset.Y + dy);
     }
 
     private static Vector2D ProposeDirectional(
@@ -449,25 +745,19 @@ public sealed class SALoop
 
         // Direction: from worst neighbor center toward i center.
         Rect2D jRect = labels[worstJ].GetBoundingRect();
-        double dirX = iRect.CenterX - jRect.CenterX;
         double dirY = iRect.CenterY - jRect.CenterY;
-        double len = Math.Sqrt(dirX * dirX + dirY * dirY);
-
-        if (len < 1e-12)
+        if (Math.Abs(dirY) < 1e-12)
         {
-            // Centers are coincident — push in a random direction.
-            double angle = rng.NextDouble() * 2 * Math.PI;
-            dirX = Math.Cos(angle); dirY = Math.Sin(angle);
+            // Centers are aligned in Y — choose a random vertical direction.
+            dirY = rng.NextDouble() < 0.5 ? -1.0 : 1.0;
         }
         else
         {
-            dirX /= len; dirY /= len;
+            dirY = dirY > 0.0 ? 1.0 : -1.0;
         }
 
         double step = (temp / t0) * LabelDiag(label) * 2.0;
-        return new Vector2D(
-            label.CurrentOffset.X + dirX * step,
-            label.CurrentOffset.Y + dirY * step);
+        return new Vector2D(0.0, label.CurrentOffset.Y + dirY * step);
     }
 
     /// <summary>
@@ -489,6 +779,35 @@ public sealed class SALoop
             pick--;
         }
         return -1;  // unreachable
+    }
+
+    private static bool IsOrderPreserved(
+        int[] order,
+        List<LabelState> labels,
+        int idx,
+        Vector2D newOffI,
+        bool isSwap,
+        int swapJ,
+        Vector2D newOffJ)
+    {
+        int n = order.Length;
+        if (n < 2) return true;
+
+        for (int k = 0; k < n - 1; k++)
+        {
+            int a = order[k];
+            int b = order[k + 1];
+
+            double ay = (a == idx) ? (labels[a].Anchor.Y + newOffI.Y) : labels[a].GetBoundingRect().CenterY;
+            if (isSwap && a == swapJ) ay = labels[a].Anchor.Y + newOffJ.Y;
+
+            double by = (b == idx) ? (labels[b].Anchor.Y + newOffI.Y) : labels[b].GetBoundingRect().CenterY;
+            if (isSwap && b == swapJ) by = labels[b].Anchor.Y + newOffJ.Y;
+
+            if (ay > by) return false;
+        }
+
+        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -622,6 +941,9 @@ public sealed class SALoop
             MinTemp = cfg.MinTemp,
             StagnationIterations = cfg.StagnationIterations,
             MaxVerticalDisplacementFactor = cfg.MaxVerticalDisplacementFactor,
+            MaxBlockDisplacementFactor = cfg.MaxBlockDisplacementFactor,
+            StackLabelsByAnchor = cfg.StackLabelsByAnchor,
+            EnforceAnchorOrder = cfg.EnforceAnchorOrder,
             LineSpacingFactor = cfg.LineSpacingFactor,
             CharWidthFactor = cfg.CharWidthFactor,
             SizeSafetyFactorX = cfg.SizeSafetyFactorX,
@@ -632,6 +954,102 @@ public sealed class SALoop
             MoveWeightSwap = cfg.MoveWeightSwap,
             WarmupSamples = cfg.WarmupSamples,
             WarmupTargetAcceptance = cfg.WarmupTargetAcceptance,
+            // In Stage B, activate the ordering constraint so that leader-line crossings
+            // are penalised once overlaps have been cleared.
+            OrderingPenaltyWeight = cfg.OrderingPenaltyWeightStageB,
+            OrderingPenaltyWeightStageB = cfg.OrderingPenaltyWeightStageB,
         };
+    }
+
+    // -------------------------------------------------------------------------
+    // Soft ordering helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns the total ordering-violation energy for the current block positions.
+    /// Violation for adjacent pair (k, k+1): max(0, centerY[k] - centerY[k+1])
+    /// (block k should be BELOW block k+1 in anchor-Y order).
+    /// O(n) in the number of blocks.
+    /// </summary>
+    private static double OrderingEnergy(int[] order, List<LabelState> labels, PlacerConfig cfg)
+    {
+        double total = 0.0;
+        for (int k = 0; k < order.Length - 1; k++)
+        {
+            LabelState a = labels[order[k]];
+            LabelState b = labels[order[k + 1]];
+            // Only enforce ordering between blocks at strictly different anchor Ys.
+            // Blocks at the same anchor Y (e.g., two labels in the same row) can move
+            // freely relative to each other without semantic crossing.
+            if (Math.Abs(a.Anchor.Y - b.Anchor.Y) < 1e-9) continue;
+            double cy_a = a.Anchor.Y + a.CurrentOffset.Y;
+            double cy_b = b.Anchor.Y + b.CurrentOffset.Y;
+            total += Math.Max(0.0, cy_a - cy_b);
+        }
+        return cfg.OrderingPenaltyWeight * total;
+    }
+
+    /// <summary>
+    /// Incremental ordering energy delta for a proposed move of block <paramref name="idx"/>
+    /// (and optionally a swap partner <paramref name="swapJ"/>).
+    /// Only the at-most-4 adjacent pairs that involve the moved block(s) are recomputed.
+    /// </summary>
+    private static double OrderingDelta(
+        int[] order,
+        int[] rankOf,
+        List<LabelState> labels,
+        int idx,
+        Vector2D newOffI,
+        bool isSwap,
+        int swapJ,
+        Vector2D newOffJ,
+        PlacerConfig cfg)
+    {
+        // Effective center Y of block at rank k, considering the proposed move.
+        double NewCY(int k)
+        {
+            int li = order[k];
+            if (li == idx)             return labels[li].Anchor.Y + newOffI.Y;
+            if (isSwap && li == swapJ) return labels[li].Anchor.Y + newOffJ.Y;
+            return labels[li].Anchor.Y + labels[li].CurrentOffset.Y;
+        }
+        double OldCY(int k)
+            => labels[order[k]].Anchor.Y + labels[order[k]].CurrentOffset.Y;
+        // Returns true if pair (k, k+1) should be skipped (same anchor Y — no ordering needed).
+        bool SameAnchorY(int k)
+            => Math.Abs(labels[order[k]].Anchor.Y - labels[order[k + 1]].Anchor.Y) < 1e-9;
+
+        // Collect the unique pair indices affected by this move.
+        // Pair k spans (order[k], order[k+1]).
+        int n = order.Length;
+        int ri = rankOf[idx];
+        int rj = isSwap ? rankOf[swapJ] : -1;
+
+        // Use a small fixed-size check instead of HashSet (at most 4 pairs).
+        int p0 = ri > 0     ? ri - 1 : -1;
+        int p1 = ri < n - 1 ? ri     : -1;
+        int p2 = rj > 0     ? rj - 1 : -1;
+        int p3 = rj >= 0 && rj < n - 1 ? rj : -1;
+
+        // Check at most 4 unique pair indices; use a simple seen-check to dedup.
+        double delta = 0.0;
+        int seen0 = -1, seen1 = -1, seen2 = -1;
+        int seenCount = 0;
+        int[] pairCandidates = { p0, p1, p2, p3 };
+        foreach (int k in pairCandidates)
+        {
+            if (k < 0) continue;
+            if (k == seen0 || k == seen1 || k == seen2) continue;
+            if      (seenCount == 0) seen0 = k;
+            else if (seenCount == 1) seen1 = k;
+            else                     seen2 = k;
+            seenCount++;
+
+            if (SameAnchorY(k)) continue;  // no ordering between same-Y anchors
+            double oldViol = Math.Max(0.0, OldCY(k) - OldCY(k + 1));
+            double newViol = Math.Max(0.0, NewCY(k) - NewCY(k + 1));
+            delta += newViol - oldViol;
+        }
+        return cfg.OrderingPenaltyWeight * delta;
     }
 }

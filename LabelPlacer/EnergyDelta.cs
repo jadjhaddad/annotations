@@ -193,4 +193,56 @@ public static class EnergyDelta
 
         return (totalArea, pairCount, maxArea);
     }
+
+    /// <summary>
+    /// Diagnostics that ignore overlaps between labels sharing the same anchor.
+    /// Useful when labels are stacked per anchor and treated as a single block.
+    /// </summary>
+    public static (double totalArea, int pairCount, double maxPairArea)
+        OverlapDiagnosticsIgnoreSameAnchor(IReadOnlyList<LabelState> labels)
+    {
+        double totalArea = 0.0;
+        double maxArea = 0.0;
+        int pairCount = 0;
+
+        for (int i = 0; i < labels.Count; i++)
+        {
+            LabelState li = labels[i];
+            Rect2D ri = li.GetBoundingRect();
+            for (int j = i + 1; j < labels.Count; j++)
+            {
+                LabelState lj = labels[j];
+                if (li.Anchor.X == lj.Anchor.X && li.Anchor.Y == lj.Anchor.Y) continue;
+
+                double a = Rect2D.OverlapArea(ri, lj.GetBoundingRect());
+                if (a > 0.0)
+                {
+                    totalArea += a;
+                    pairCount++;
+                    if (a > maxArea) maxArea = a;
+                }
+            }
+        }
+
+        return (totalArea, pairCount, maxArea);
+    }
+
+    /// <summary>Displacement component of the global energy — O(n), cheap.</summary>
+    public static double ComputeDispComponent(IReadOnlyList<LabelState> labels, PlacerConfig cfg)
+    {
+        double disp = 0.0;
+        foreach (LabelState ls in labels)
+            disp += cfg.BetaX * System.Math.Abs(ls.CurrentOffset.X)
+                  + cfg.BetaY * System.Math.Abs(ls.CurrentOffset.Y);
+        return disp;
+    }
+
+    /// <summary>Group spread component of the global energy — O(groups), cheap.</summary>
+    public static double ComputeSpreadComponent(GroupRegistry groups, PlacerConfig cfg)
+    {
+        double spread = 0.0;
+        for (int g = 0; g < groups.GroupCount; g++)
+            spread += groups[g].Spread();
+        return cfg.Gamma * spread;
+    }
 }

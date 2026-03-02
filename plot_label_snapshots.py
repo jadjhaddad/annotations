@@ -2,9 +2,9 @@
 """Plot LabelPlacer snapshots (anchors + label rectangles) from a CSV.
 
 This script reads the snapshot CSV produced by LabelPlacer.TestHarness
-(`--snapshot-csv`) and writes one SVG per snapshot (scenario/kind/iteration).
+(`--snapshot-csv`) and writes one image per snapshot (scenario/kind/iteration).
 
-No third-party dependencies.
+SVG output has no third-party dependencies. PNG output requires matplotlib.
 """
 
 from __future__ import annotations
@@ -63,6 +63,31 @@ def _safe_filename(s: str) -> str:
         else:
             out.append("_")
     return "".join(out).strip("_") or "snapshot"
+
+
+def _build_color_map(rows: List["Row"]) -> Dict[int, str]:
+    palette = [
+        "#2563eb",
+        "#dc2626",
+        "#16a34a",
+        "#ea580c",
+        "#7c3aed",
+        "#0f766e",
+        "#be123c",
+        "#9333ea",
+        "#0ea5e9",
+        "#f59e0b",
+        "#84cc16",
+        "#4f46e5",
+        "#ef4444",
+        "#22c55e",
+        "#a855f7",
+    ]
+    keys = sorted({r.label_index for r in rows})
+    color_map: Dict[int, str] = {}
+    for i, k in enumerate(keys):
+        color_map[k] = palette[i % len(palette)]
+    return color_map
 
 
 def read_snapshots(csv_path: str) -> Dict[Tuple[str, str, int], List[Row]]:
@@ -190,11 +215,9 @@ def render_svg(
     anchors: List[str] = []
     texts: List[str] = []
 
-    # Simple, consistent style.
-    rect_fill = "#1e90ff"
-    rect_fill_opacity = "0.07"
-    rect_stroke = "#0b3d91"
-    rect_stroke_opacity = "0.35"
+    color_map = _build_color_map(rows)
+    rect_fill_opacity = "0.08"
+    rect_stroke_opacity = "0.55"
 
     for r in sorted(rows, key=lambda x: x.label_index):
         ax = map_x(r.anchor_x)
@@ -213,14 +236,15 @@ def render_svg(
         y = map_y(r.top)
         w = (r.right - r.left) * scale
         h = (r.top - r.bottom) * scale
+        color = color_map[r.label_index]
         rects.append(
             f'<rect x="{x:.2f}" y="{y:.2f}" width="{w:.2f}" height="{h:.2f}" '
-            f'fill="{rect_fill}" fill-opacity="{rect_fill_opacity}" '
-            f'stroke="{rect_stroke}" stroke-opacity="{rect_stroke_opacity}" stroke-width="1" />'
+            f'fill="{color}" fill-opacity="{rect_fill_opacity}" '
+            f'stroke="{color}" stroke-opacity="{rect_stroke_opacity}" stroke-width="1" />'
         )
 
         anchors.append(
-            f'<circle cx="{ax:.2f}" cy="{ay:.2f}" r="2.0" fill="#111827" fill-opacity="0.85" />'
+            f'<circle cx="{ax:.2f}" cy="{ay:.2f}" r="2.0" fill="{color}" fill-opacity="0.95" />'
         )
 
         if label_mode != "none":
@@ -266,12 +290,149 @@ def render_svg(
         f.write("\n".join(svg))
 
 
+def render_png(
+    rows: List[Row],
+    title: str,
+    out_path: str,
+    max_dim_px: int = 1200,
+    padding_frac: float = 0.05,
+    label_mode: str = "auto",
+    show_leaders: bool = True,
+) -> None:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise SystemExit(
+            "matplotlib is required for PNG output. Install it or use --format svg."
+        ) from exc
+
+    if not rows:
+        return
+
+    # Determine bounds (anchors + rectangles).
+    min_x = math.inf
+    max_x = -math.inf
+    min_y = math.inf
+    max_y = -math.inf
+    for r in rows:
+        min_x = min(min_x, r.anchor_x, r.left)
+        max_x = max(max_x, r.anchor_x, r.right)
+        min_y = min(min_y, r.anchor_y, r.bottom)
+        max_y = max(max_y, r.anchor_y, r.top)
+
+    dx = max_x - min_x
+    dy = max_y - min_y
+    if dx <= 0:
+        dx = 1.0
+        min_x -= 0.5
+        max_x += 0.5
+    if dy <= 0:
+        dy = 1.0
+        min_y -= 0.5
+        max_y += 0.5
+
+    pad = max(dx, dy) * max(0.0, padding_frac)
+    min_x -= pad
+    max_x += pad
+    min_y -= pad
+    max_y += pad
+
+    # Label defaults.
+    if label_mode == "auto":
+        label_mode = "idx" if len(rows) <= 100 else "none"
+    if label_mode not in ("none", "idx", "handle"):
+        raise SystemExit("--label must be one of: auto, none, idx, handle")
+
+    # Figure sizing in inches (dpi = 100).
+    max_dim_px = max(200, int(max_dim_px))
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+    if span_x >= span_y:
+        width_px = max_dim_px
+        height_px = max(200, int(round(max_dim_px * (span_y / span_x))))
+    else:
+        height_px = max_dim_px
+        width_px = max(200, int(round(max_dim_px * (span_x / span_y))))
+
+    dpi = 100.0
+    fig_w = width_px / dpi
+    fig_h = height_px / dpi
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
+    ax.set_facecolor("#fbfbfd")
+    fig.patch.set_facecolor("#fbfbfd")
+
+    color_map = _build_color_map(rows)
+
+    if show_leaders:
+        for r in rows:
+            ax.plot(
+                [r.anchor_x, r.center_x],
+                [r.anchor_y, r.center_y],
+                color="#6b7280",
+                alpha=0.35,
+                linewidth=1.0,
+                zorder=1,
+            )
+
+    for r in rows:
+        color = color_map[r.label_index]
+        rect = plt.Rectangle(
+            (r.left, r.bottom),
+            r.right - r.left,
+            r.top - r.bottom,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.08,
+            linewidth=1.0,
+            zorder=2,
+        )
+        ax.add_patch(rect)
+
+    for r in rows:
+        color = color_map[r.label_index]
+        ax.scatter([r.anchor_x], [r.anchor_y], s=14, color=color, alpha=0.95, zorder=3)
+
+    if label_mode != "none":
+        for r in rows:
+            if label_mode == "idx":
+                txt = str(r.label_index)
+            else:
+                h0 = r.handle.split("\\n", 1)[0]
+                txt = h0[:18] + ("..." if len(h0) > 18 else "")
+            ax.text(
+                r.center_x + 0.2,
+                r.center_y + 0.2,
+                txt,
+                fontsize=8,
+                color="#111827",
+                alpha=0.75,
+                zorder=4,
+            )
+
+    ax.set_title(title, fontsize=10, color="#111827", pad=10)
+    ax.set_xlim(min_x, max_x)
+    ax.set_ylim(min_y, max_y)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Plot LabelPlacer label rectangles from snapshot CSV"
     )
     ap.add_argument("csv", help="Path to snapshot CSV (from --snapshot-csv)")
-    ap.add_argument("--out", default="plots", help="Output directory for SVG files")
+    ap.add_argument("--out", default="plots", help="Output directory for plot files")
     ap.add_argument(
         "--scenario", default="", help="Filter by scenario name (e.g. dense)"
     )
@@ -280,7 +441,7 @@ def main() -> None:
         "--iteration", type=int, default=None, help="Filter by a specific iteration"
     )
     ap.add_argument(
-        "--size", type=int, default=1200, help="Max SVG dimension in pixels"
+        "--size", type=int, default=1200, help="Max image dimension in pixels"
     )
     ap.add_argument(
         "--padding", type=float, default=0.05, help="Padding fraction around bounds"
@@ -289,6 +450,7 @@ def main() -> None:
     ap.add_argument(
         "--no-leaders", action="store_true", help="Disable anchor->label leader lines"
     )
+    ap.add_argument("--format", default="png", help="Output format: png|svg")
     args = ap.parse_args()
 
     snapshots = read_snapshots(args.csv)
@@ -308,22 +470,37 @@ def main() -> None:
     if not selected:
         raise SystemExit("No snapshots matched filters")
 
+    fmt = args.format.lower().strip()
+    if fmt not in ("png", "svg"):
+        raise SystemExit("--format must be png or svg")
+
     for scenario, kind, it in selected:
         rows = snapshots[(scenario, kind, it)]
         title = f"{scenario}  {kind}  iter={it}  n={len(rows)}"
-        out_name = f"{_safe_filename(scenario)}_{_safe_filename(kind)}_{it:06d}.svg"
+        out_name = f"{_safe_filename(scenario)}_{_safe_filename(kind)}_{it:06d}.{fmt}"
         out_path = os.path.join(args.out, out_name)
-        render_svg(
-            rows,
-            title=title,
-            out_path=out_path,
-            max_dim_px=args.size,
-            padding_frac=args.padding,
-            label_mode=args.label,
-            show_leaders=not args.no_leaders,
-        )
+        if fmt == "svg":
+            render_svg(
+                rows,
+                title=title,
+                out_path=out_path,
+                max_dim_px=args.size,
+                padding_frac=args.padding,
+                label_mode=args.label,
+                show_leaders=not args.no_leaders,
+            )
+        else:
+            render_png(
+                rows,
+                title=title,
+                out_path=out_path,
+                max_dim_px=args.size,
+                padding_frac=args.padding,
+                label_mode=args.label,
+                show_leaders=not args.no_leaders,
+            )
 
-    print(f"Wrote {len(selected)} SVG file(s) to: {args.out}")
+    print(f"Wrote {len(selected)} {fmt.upper()} file(s) to: {args.out}")
 
 
 if __name__ == "__main__":

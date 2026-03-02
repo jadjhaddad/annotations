@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LabelPlacer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ef320101fc3d82a8ca2c4bd31af5f963bcc9975d")]
 [assembly: System.Reflection.AssemblyProductAttribute("LabelPlacer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LabelPlacer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

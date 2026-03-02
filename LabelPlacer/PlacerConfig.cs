@@ -29,7 +29,7 @@ public sealed class PlacerConfig
     public double BetaXStageB { get; set; } = 2.0;
 
     /// <summary>BetaY in Stage B.</summary>
-    public double BetaYStageB { get; set; } = 20.0;
+    public double BetaYStageB { get; set; } = 200.0;
 
     /// <summary>Gamma in Stage B.</summary>
     public double GammaStageB { get; set; } = 150.0;
@@ -50,10 +50,46 @@ public sealed class PlacerConfig
     // --- Movement constraints ---
 
     /// <summary>
+    /// If true, labels that share the same anchor are treated as a single block
+    /// during optimization (all members move together).
+    /// </summary>
+    public bool StackLabelsByAnchor { get; set; } = true;
+
+    /// <summary>
+    /// If true, stacked blocks must preserve anchor-Y order (no vertical crossing).
+    /// Deprecated: soft ordering via <see cref="OrderingPenaltyWeight"/> is now always
+    /// applied when <see cref="StackLabelsByAnchor"/> is true. This flag is ignored.
+    /// </summary>
+    public bool EnforceAnchorOrder { get; set; } = false;
+
+    /// <summary>
+    /// Energy penalty per world-unit of block-center crossing in Stage A.
+    /// A small value (≪ Alpha) gently steers Stage A toward ordering-friendly
+    /// solutions without blocking overlap clearing.
+    /// Stage B uses <see cref="OrderingPenaltyWeightStageB"/> instead.
+    /// </summary>
+    public double OrderingPenaltyWeight { get; set; } = 20.0;
+
+    /// <summary>
+    /// Energy penalty per world-unit of block-center crossing in Stage B (beautify phase).
+    /// Applied after overlaps reach zero. Should be large enough to prevent crossings
+    /// at the final low temperatures, but not so large as to overwhelm the alpha term
+    /// (which must still be able to clear any small overlaps reintroduced by displacement pull-back).
+    /// </summary>
+    public double OrderingPenaltyWeightStageB { get; set; } = 1000.0;
+
+
+    /// <summary>
     /// Maximum absolute Y offset as a multiple of the label height.
     /// e.g. 2.0 means the label can move at most 2× its own height vertically.
     /// </summary>
-    public double MaxVerticalDisplacementFactor { get; set; } = 2.0;
+    public double MaxVerticalDisplacementFactor { get; set; } = 6.0;
+
+    /// <summary>
+    /// Maximum absolute Y offset for stacked anchor blocks as a multiple of the
+    /// minimum vertical spacing between distinct anchors.
+    /// </summary>
+    public double MaxBlockDisplacementFactor { get; set; } = 1.0;
 
     // --- Label size estimation (fallback when API extents unavailable) ---
 
@@ -75,7 +111,7 @@ public sealed class PlacerConfig
     /// Tolerance = coincidenceFactor × medianLabelHeight.
     /// Labels whose anchors are within this distance are considered coincident.
     /// </summary>
-    public double CoincidenceFactor { get; set; } = 0.1;
+    public double CoincidenceFactor { get; set; } = 0.5;
 
     // --- Move mix (unnormalized weights; will be normalized internally) ---
 

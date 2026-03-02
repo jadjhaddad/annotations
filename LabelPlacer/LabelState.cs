@@ -98,7 +98,8 @@ public enum LabelSizeSource
 /// Mutable state for a single label during the SA optimization.
 ///
 /// Geometry convention (internal, independent of Civil 3D label offset semantics):
-///   The bounding rectangle is centered at (Anchor + CurrentOffset).
+///   The anchor is at the center of the left edge of the label.
+///   The bounding rectangle center is at (Anchor + CurrentOffset + (Width/2, 0)).
 ///   The Civil 3D wrapper is responsible for converting between this convention
 ///   and whatever offset reference point Civil 3D uses (leader landing, corner, etc.).
 /// </summary>
@@ -144,7 +145,7 @@ public sealed class LabelState
 
     /// <summary>
     /// Current label offset from the anchor, expressed in drawing units.
-    /// The bounding rectangle center is at Anchor + CurrentOffset.
+    /// The bounding rectangle center is at Anchor + CurrentOffset + (Width/2, 0).
     /// Reset to zero at the start of every run (cold start).
     /// </summary>
     public Vector2D CurrentOffset { get; set; }
@@ -174,13 +175,13 @@ public sealed class LabelState
 
     /// <summary>
     /// Returns the bounding rectangle for the label at its current offset.
-    /// Center = Anchor + CurrentOffset.
+    /// Center = Anchor + CurrentOffset + (Width/2, 0).
     /// </summary>
     public Rect2D GetBoundingRect()
     {
-        double cx = Anchor.X + CurrentOffset.X;
+        double left = Anchor.X + CurrentOffset.X;
         double cy = Anchor.Y + CurrentOffset.Y;
-        return Rect2D.FromCenter(cx, cy, Width * 0.5, Height * 0.5);
+        return new Rect2D(left, cy - Height * 0.5, left + Width, cy + Height * 0.5);
     }
 
     /// <summary>
@@ -189,9 +190,9 @@ public sealed class LabelState
     /// </summary>
     public Rect2D GetBoundingRectAt(Vector2D proposedOffset)
     {
-        double cx = Anchor.X + proposedOffset.X;
+        double left = Anchor.X + proposedOffset.X;
         double cy = Anchor.Y + proposedOffset.Y;
-        return Rect2D.FromCenter(cx, cy, Width * 0.5, Height * 0.5);
+        return new Rect2D(left, cy - Height * 0.5, left + Width, cy + Height * 0.5);
     }
 
     /// <summary>
