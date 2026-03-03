@@ -1,2 +1,19 @@
-/plots*
-*.csv
+## Build outputs (C#/.NET)
+**/bin/
+**/obj/
+
+## Generated visualization artifacts
+viz/
+plots/
+plots_*/
+
+## Generated data exports
+snapshots*.csv
+
+## Local logs
+*.log
+
+## OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/

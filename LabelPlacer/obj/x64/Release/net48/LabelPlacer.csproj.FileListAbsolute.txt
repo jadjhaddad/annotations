@@ -1,8 +1,0 @@
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/bin/x64/Release/net48/LabelPlacer.dll
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/bin/x64/Release/net48/LabelPlacer.pdb
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/obj/x64/Release/net48/LabelPlacer.GeneratedMSBuildEditorConfig.editorconfig
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/obj/x64/Release/net48/LabelPlacer.AssemblyInfoInputs.cache
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/obj/x64/Release/net48/LabelPlacer.AssemblyInfo.cs
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/obj/x64/Release/net48/LabelPlacer.csproj.CoreCompileInputs.cache
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/obj/x64/Release/net48/LabelPlacer.dll
-/mnt/c/Users/jjhaddad/Documents/Work/BridgeDesignAutomation/Annotations/LabelPlacer/obj/x64/Release/net48/LabelPlacer.pdb
