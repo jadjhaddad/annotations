@@ -211,8 +211,9 @@ public sealed class SALoop
 
         rng ??= new Random(42);
 
-        // --- 1. Cold start: all offsets to zero ---
-        foreach (LabelState ls in labels) ls.CurrentOffset = Vector2D.Zero;
+        // --- 1. Cold start (or warm start from existing offsets) ---
+        if (!cfg.WarmStart)
+            foreach (LabelState ls in labels) ls.CurrentOffset = Vector2D.Zero;
 
         // --- 2. Build structures ---
         GroupRegistry groups = GroupRegistry.Build(labels, cfg);
@@ -502,8 +503,9 @@ public sealed class SALoop
         if (labels.Count == 0)
             return new SAResult(Array.Empty<Vector2D>(), 0, 0, 0, true, false, 0, 0, 0);
 
-        // Cold start: all offsets to zero, then pre-stack labels per anchor.
-        foreach (LabelState ls in labels) ls.CurrentOffset = Vector2D.Zero;
+        // Cold start (or warm start): reset offsets, then pre-stack labels per anchor.
+        if (!cfg.WarmStart)
+            foreach (LabelState ls in labels) ls.CurrentOffset = Vector2D.Zero;
         Vector2D[] baseOffsets = ApplyAnchorStacks(labels);
 
         List<LabelBlock> blocks = BuildAnchorBlocks(labels);

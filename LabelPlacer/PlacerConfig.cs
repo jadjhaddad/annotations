@@ -168,6 +168,16 @@ public sealed class PlacerConfig
     /// <summary>Relative weight for swap-within-group moves.</summary>
     public double MoveWeightSwap { get; set; } = 0.1;
 
+    // --- Warm start ---
+
+    /// <summary>
+    /// If true, the SA loop skips the cold-start offset reset and begins from
+    /// whatever offsets the labels already have (e.g. from a prior greedy pass).
+    /// The warmup still runs from the current state to calibrate T₀.
+    /// Default false = cold start (all offsets reset to zero).
+    /// </summary>
+    public bool WarmStart { get; set; } = false;
+
     // --- Warmup ---
 
     /// <summary>Number of random perturbations to sample during warmup to determine T₀.</summary>

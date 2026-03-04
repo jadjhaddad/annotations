@@ -23,13 +23,17 @@ static class Program
     static int SnapshotInterval;
     static StreamWriter? SnapshotWriter;
     static string CurrentScenarioName = "";
+    static bool GreedyMode;
+    static bool HybridMode;
 
     static void Main(string[] args)
     {
-        (string filter, bool logEveryIter, string? snapshotCsvPath, int snapshotInterval) = ParseArgs(args);
+        (string filter, bool logEveryIter, string? snapshotCsvPath, int snapshotInterval, bool greedy, bool hybrid) = ParseArgs(args);
         LogEveryIteration = logEveryIter;
         SnapshotCsvPath = snapshotCsvPath;
         SnapshotInterval = snapshotInterval;
+        GreedyMode = greedy;
+        HybridMode = hybrid;
 
         if (!string.IsNullOrWhiteSpace(SnapshotCsvPath))
         {
@@ -54,12 +58,14 @@ static class Program
         SnapshotWriter?.Dispose();
     }
 
-    static (string filter, bool logEveryIter, string? snapshotCsvPath, int snapshotInterval) ParseArgs(string[] args)
+    static (string filter, bool logEveryIter, string? snapshotCsvPath, int snapshotInterval, bool greedy, bool hybrid) ParseArgs(string[] args)
     {
         string filter = "";
         bool logEveryIter = false;
         string? snapshotCsvPath = null;
         int snapshotInterval = 0;
+        bool greedy = false;
+        bool hybrid = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -89,11 +95,25 @@ static class Program
                 continue;
             }
 
+            if (arg.Equals("--greedy", StringComparison.OrdinalIgnoreCase)
+                || arg.Equals("-g", StringComparison.OrdinalIgnoreCase))
+            {
+                greedy = true;
+                continue;
+            }
+
+            if (arg.Equals("--hybrid", StringComparison.OrdinalIgnoreCase)
+                || arg.Equals("-h", StringComparison.OrdinalIgnoreCase))
+            {
+                hybrid = true;
+                continue;
+            }
+
             if (!arg.StartsWith("-", StringComparison.Ordinal) && filter.Length == 0)
                 filter = arg.ToLowerInvariant();
         }
 
-        return (filter, logEveryIter, snapshotCsvPath, snapshotInterval);
+        return (filter, logEveryIter, snapshotCsvPath, snapshotInterval, greedy, hybrid);
     }
 
     static void RunIf(string name, string filter, Action test)
@@ -368,12 +388,129 @@ static class Program
             sizeSource: LabelSizeSource.Estimated);
     }
 
+    static void RunHybridAndReport(List<LabelState> labels, PlacerConfig cfg, int seed)
+    {
+        Console.WriteLine($"  {labels.Count} labels");
+        PrintInitialDiagnostics(labels, cfg);
+
+        if (SnapshotWriter != null)
+            WriteSnapshot("start", 0, labels);
+
+        // --- Phase 1: Greedy ---
+        var swG = Stopwatch.StartNew();
+        var greedy = GreedyPlacer.Place(labels);
+        swG.Stop();
+        Console.WriteLine($"  --- Greedy phase ---");
+        Console.WriteLine($"  Unplaced     : {greedy.UnplacedCount}");
+        Console.WriteLine($"  Overlap pairs: {greedy.FinalOverlapPairs}  area={greedy.FinalOverlapArea:F4}");
+        Console.WriteLine($"  Greedy time  : {swG.ElapsedMilliseconds} ms");
+
+        if (SnapshotWriter != null)
+            WriteSnapshot("greedy", 0, labels);
+
+        // If greedy already achieved zero overlap, skip SA refinement.
+        if (greedy.FinalOverlapPairs == 0)
+        {
+            if (SnapshotWriter != null) WriteSnapshot("end", 0, labels);
+            Console.WriteLine($"  [Greedy solved — skipping SA refinement]");
+            Console.WriteLine($"  Total time   : {swG.ElapsedMilliseconds} ms");
+            return;
+        }
+
+        // Save greedy offsets so we can fall back if SA makes things worse.
+        var greedyOffsets = new Vector2D[labels.Count];
+        for (int i = 0; i < labels.Count; i++) greedyOffsets[i] = labels[i].CurrentOffset;
+
+        // --- Phase 2: SA refinement from greedy positions ---
+        var refineCfg = new PlacerConfig
+        {
+            WarmStart            = true,
+            StackLabelsByAnchor  = false,   // greedy already stacked; refine individually
+            Alpha                = cfg.Alpha,
+            BetaX                = cfg.BetaX,
+            BetaY                = cfg.BetaY,
+            Gamma                = cfg.Gamma,
+            AlphaStageB          = cfg.AlphaStageB,
+            BetaXStageB          = cfg.BetaXStageB,
+            BetaYStageB          = cfg.BetaYStageB,
+            GammaStageB          = cfg.GammaStageB,
+            CoolingRate          = 0.999,
+            MinTemp              = cfg.MinTemp,
+            StagnationIterations = 10_000,
+            MaxVerticalDisplacementFactor = cfg.MaxVerticalDisplacementFactor,
+            CoincidenceFactor    = cfg.CoincidenceFactor,
+            WarmupSamples        = cfg.WarmupSamples,
+            // Low acceptance target: near-optimal warm start needs a tight T0
+            // so the SA acts as a local hill-climber rather than broad explorer.
+            WarmupTargetAcceptance = 0.25,
+            MoveWeightRandom     = cfg.MoveWeightRandom,
+            MoveWeightDirectional = cfg.MoveWeightDirectional,
+            MoveWeightSwap       = cfg.MoveWeightSwap,
+        };
+
+        var loop = new SALoop { ProgressInterval = 500 };
+        loop.OnWarmupComplete = (t0, targetAccept) =>
+            Console.WriteLine($"  T0={t0,14:F2}  target_accept={targetAccept * 100.0:F0}%");
+
+        var rng = new Random(seed);
+        var swS = Stopwatch.StartNew();
+        var result = loop.Run(labels, refineCfg, rng);
+        swS.Stop();
+
+        // If SA made overlap worse than greedy, restore the greedy result.
+        if (result.FinalOverlapPairs > greedy.FinalOverlapPairs)
+        {
+            for (int i = 0; i < labels.Count; i++) labels[i].CurrentOffset = greedyOffsets[i];
+            Console.WriteLine($"  [SA regressed — restoring greedy result]");
+        }
+
+        if (SnapshotWriter != null)
+            WriteSnapshot("end", result.TotalIterations, labels);
+
+        var (finalArea, finalPairs, finalMax) = EnergyDelta.OverlapDiagnostics(labels);
+        Console.WriteLine($"  --- Refinement result ---");
+        Console.WriteLine($"  Iterations   : {result.TotalIterations:N0}");
+        Console.WriteLine($"  Stop reason  : {(result.StagnationStop ? "stagnation" : "T < minTemp")}");
+        Console.WriteLine($"  Zero overlap : {result.ZeroOverlapReached}");
+        Console.WriteLine($"  Overlap area : {finalArea:F6}");
+        Console.WriteLine($"  Overlap pairs: {finalPairs}");
+        Console.WriteLine($"  SA time      : {swS.ElapsedMilliseconds} ms");
+        Console.WriteLine($"  Total time   : {swG.ElapsedMilliseconds + swS.ElapsedMilliseconds} ms");
+    }
+
+    static void RunGreedyAndReport(List<LabelState> labels, PlacerConfig cfg)
+    {
+        Console.WriteLine($"  {labels.Count} labels");
+        PrintInitialDiagnostics(labels, cfg);
+
+        if (SnapshotWriter != null)
+            WriteSnapshot("start", 0, labels);
+
+        var sw = Stopwatch.StartNew();
+        var result = GreedyPlacer.Place(labels);
+        sw.Stop();
+
+        if (SnapshotWriter != null)
+            WriteSnapshot("end", 0, labels);
+
+        Console.WriteLine($"  --- Greedy Result ---");
+        Console.WriteLine($"  Unplaced     : {result.UnplacedCount}");
+        Console.WriteLine($"  Refine sweeps: {result.RefinementSweeps}");
+        Console.WriteLine($"  Overlap area : {result.FinalOverlapArea:F6}");
+        Console.WriteLine($"  Overlap pairs: {result.FinalOverlapPairs}");
+        Console.WriteLine($"  Max pair ovlp: {result.FinalMaxPairOverlap:F6}");
+        Console.WriteLine($"  Greedy time  : {sw.ElapsedMilliseconds} ms");
+    }
+
     static void RunAndReport(
         List<LabelState> labels, PlacerConfig cfg, int seed,
         bool verbose = false,
         int auditInterval = 0,
         Action<int, double, double, double>? onAudit = null)
     {
+        if (GreedyMode)  { RunGreedyAndReport(labels, cfg); return; }
+        if (HybridMode)  { RunHybridAndReport(labels, cfg, seed); return; }
+
         Console.WriteLine($"  {labels.Count} labels");
         PrintInitialDiagnostics(labels, cfg);
 
