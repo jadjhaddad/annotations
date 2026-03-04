@@ -1,0 +1,1 @@
+QGIS PAL labeling engine, PAL labeling library (Pana/pal), D3-Labeler, Labelgun
