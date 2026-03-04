@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace LabelPlacer;
 
 /// <summary>
@@ -21,57 +23,85 @@ public readonly struct LabelCandidate
 /// <summary>
 /// Generates an ordered list of discrete candidate placement offsets for a label.
 ///
-/// Candidates are arranged in three horizontal bands:
-///   - Right  (dx = 0):         anchor at left edge — CAD default, most preferred
-///   - Left   (dx = -W*1.05):   label to the left of the anchor
-///   - Far-right (dx = +W*0.55): label pushed further right
+/// Three horizontal bands are offered:
+///   - Right  (dx = 0):           anchor at left edge — CAD default
+///   - Left   (dx ≈ -W):          label entirely to the left of the anchor
+///   - Far-right (dx ≈ +W/2):     label pushed further right
 ///
-/// Each band has multiple vertical levels spaced 1.05 × label height apart
-/// so adjacent levels never overlap one another.
+/// Band order depends on <paramref name="preferLeft"/>:
+///   false (default) → Right first, then Left, then Far-right
+///   true            → Left first, then Right, then Far-right
 ///
-/// Candidates are returned pre-sorted from most preferred to least preferred.
+/// Within each band, vertical levels are spaced 1.05 × height apart so that
+/// adjacent levels never overlap one another.
+///
+/// Candidates are assigned preference scores 0, 1, 2, … in output order
+/// so that earlier (more preferred) entries beat later ones in the composite
+/// greedy score when overlap and leader-cross counts tie.
 /// </summary>
 public static class CandidateGenerator
 {
-    public static LabelCandidate[] Generate(LabelState label)
+    /// <summary>
+    /// Generates candidates for <paramref name="label"/>.
+    /// </summary>
+    /// <param name="label">The label being placed.</param>
+    /// <param name="preferLeft">
+    ///   When true, left-side candidates are listed before right-side ones.
+    ///   Pass true when more anchor neighbours lie to the right of this anchor
+    ///   (so placing the label left moves it away from the crowd).
+    /// </param>
+    public static LabelCandidate[] Generate(LabelState label, bool preferLeft = false)
     {
         double w     = label.Width;
         double h     = label.Height;
-        double vStep = h * 1.05;          // one non-overlapping vertical level
-        double hGap  = w * 0.05;          // small horizontal gap for left/far-right
-        double dxLeft  = -(w + hGap);     // left band: label entirely left of anchor
-        double dxFarR  =  (w * 0.5 + hGap); // far-right band: pushed further right
+        double vStep = h * 1.05;          // non-overlapping vertical step
+        double hGap  = w * 0.05;          // small gap for left/far-right bands
+        double dxLeft = -(w + hGap);      // left band: label entirely left of anchor
+        double dxFarR =  w * 0.5 + hGap; // far-right band
 
+        var    buf   = new List<LabelCandidate>(21);
         double score = 0.0;
-        var buf = new LabelCandidate[17];
-        int n = 0;
 
         void Add(double dx, double dy)
-            => buf[n++] = new LabelCandidate(new Vector2D(dx, dy), score++);
+            => buf.Add(new LabelCandidate(new Vector2D(dx, dy), score++));
 
-        // --- Right band (preferred) — 9 candidates ---
-        Add(0,   0);
-        Add(0,  +vStep);
-        Add(0,  -vStep);
-        Add(0,  +vStep * 2);
-        Add(0,  -vStep * 2);
-        Add(0,  +vStep * 3);
-        Add(0,  -vStep * 3);
-        Add(0,  +vStep * 4);
-        Add(0,  -vStep * 4);
+        void AddRightBand()
+        {
+            Add(0, 0);
+            Add(0, +vStep);   Add(0, -vStep);
+            Add(0, +vStep*2); Add(0, -vStep*2);
+            Add(0, +vStep*3); Add(0, -vStep*3);
+            Add(0, +vStep*4); Add(0, -vStep*4);
+        }
 
-        // --- Left band — 5 candidates ---
-        Add(dxLeft,  0);
-        Add(dxLeft, +vStep);
-        Add(dxLeft, -vStep);
-        Add(dxLeft, +vStep * 2);
-        Add(dxLeft, -vStep * 2);
+        void AddLeftBand()
+        {
+            Add(dxLeft, 0);
+            Add(dxLeft, +vStep);   Add(dxLeft, -vStep);
+            Add(dxLeft, +vStep*2); Add(dxLeft, -vStep*2);
+            Add(dxLeft, +vStep*3); Add(dxLeft, -vStep*3);
+            Add(dxLeft, +vStep*4); Add(dxLeft, -vStep*4);
+        }
 
-        // --- Far-right band — 3 candidates ---
-        Add(dxFarR,  0);
-        Add(dxFarR, +vStep);
-        Add(dxFarR, -vStep);
+        void AddFarRightBand()
+        {
+            Add(dxFarR, 0);
+            Add(dxFarR, +vStep); Add(dxFarR, -vStep);
+        }
 
-        return buf; // exactly 17 entries
+        if (preferLeft)
+        {
+            AddLeftBand();
+            AddRightBand();
+            AddFarRightBand();
+        }
+        else
+        {
+            AddRightBand();
+            AddLeftBand();
+            AddFarRightBand();
+        }
+
+        return buf.ToArray(); // 21 entries
     }
 }

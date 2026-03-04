@@ -39,15 +39,24 @@ public static class GreedyPlacer
     /// </summary>
     public static int MaxRefinementSweeps { get; set; } = 8;
 
+    /// <summary>
+    /// Score penalty added when a candidate lands on the non-preferred side.
+    /// Must be larger than the candidate-count range (21) but much smaller than
+    /// a single unit of overlap area (1e6) so it never forces an overlap.
+    /// </summary>
+    public static double WrongSidePenalty { get; set; } = 200.0;
+
     public static GreedyResult Place(List<LabelState> labels)
     {
         foreach (LabelState ls in labels) ls.CurrentOffset = Vector2D.Zero;
 
         if (labels.Count == 0) return new GreedyResult();
 
+        bool[] preferLeft = ComputePreferLeft(labels);
+
         LabelCandidate[][] allCandidates = new LabelCandidate[labels.Count][];
         for (int i = 0; i < labels.Count; i++)
-            allCandidates[i] = CandidateGenerator.Generate(labels[i]);
+            allCandidates[i] = CandidateGenerator.Generate(labels[i], preferLeft[i]);
 
         int[] order = ComputePriorityOrder(labels);
 
@@ -82,7 +91,10 @@ public static class GreedyPlacer
                         crosses = CountLeaderCrossesGrid(grid, i, ax, ay, lx, ly, labels, seen);
                 }
 
-                double score = overlap * 1e6 + crosses * 1000.0 + c;
+                double sideCost = (preferLeft[i]  && offset.X > 1e-9) ||
+                                  (!preferLeft[i] && offset.X < -1e-9)
+                                  ? WrongSidePenalty : 0.0;
+                double score = overlap * 1e6 + crosses * 1000.0 + sideCost + c;
                 if (score < bestScore) { bestScore = score; bestCandiIdx = c; }
                 if (bestScore < 0.5) break;   // perfect candidate — stop early
             }
@@ -93,7 +105,7 @@ public static class GreedyPlacer
         }
 
         // ── Refinement sweeps (full two-way leader check) ────────────────────
-        int sweeps = Refine(labels, allCandidates);
+        int sweeps = Refine(labels, allCandidates, preferLeft);
 
         var (area, pairs, maxP) = EnergyDelta.OverlapDiagnostics(labels);
         return new GreedyResult
@@ -115,7 +127,7 @@ public static class GreedyPlacer
     /// using the two-way leader score; moves to the best if it improves things.
     /// Returns the number of sweeps performed.
     /// </summary>
-    private static int Refine(List<LabelState> labels, LabelCandidate[][] allCandidates)
+    private static int Refine(List<LabelState> labels, LabelCandidate[][] allCandidates, bool[] preferLeft)
     {
         int n = labels.Count;
         int sweeps = 0;
@@ -129,7 +141,7 @@ public static class GreedyPlacer
                 LabelState       ls         = labels[i];
                 LabelCandidate[] candidates = allCandidates[i];
 
-                double currentScore = LabelScore(i, ls.CurrentOffset, candidates, labels);
+                double currentScore = LabelScore(i, ls.CurrentOffset, candidates, labels, preferLeft[i]);
 
                 double bestScore    = currentScore;
                 int    bestCandiIdx = -1;
@@ -141,7 +153,7 @@ public static class GreedyPlacer
                     if (Math.Abs(off.X - ls.CurrentOffset.X) < 1e-9 &&
                         Math.Abs(off.Y - ls.CurrentOffset.Y) < 1e-9) continue;
 
-                    double score = LabelScore(i, off, candidates, labels);
+                    double score = LabelScore(i, off, candidates, labels, preferLeft[i]);
                     if (score < bestScore - 1e-9)
                     {
                         bestScore    = score;
@@ -171,7 +183,7 @@ public static class GreedyPlacer
     ///   incoming = other labels' leaders cross this label's rect
     /// </summary>
     private static double LabelScore(
-        int i, Vector2D offset, LabelCandidate[] candidates, List<LabelState> labels)
+        int i, Vector2D offset, LabelCandidate[] candidates, List<LabelState> labels, bool preferLeft)
     {
         LabelState ls   = labels[i];
         double     ax   = ls.Anchor.X, ay = ls.Anchor.Y;
@@ -217,7 +229,106 @@ public static class GreedyPlacer
             { pref = c; break; }
         }
 
-        return totalOverlap * 1e6 + (outgoing + incoming) * 1000.0 + pref;
+        double sideCost = (preferLeft  && offset.X > 1e-9) ||
+                          (!preferLeft && offset.X < -1e-9)
+                          ? WrongSidePenalty : 0.0;
+
+        return totalOverlap * 1e6 + (outgoing + incoming) * 1000.0 + sideCost + pref;
+    }
+
+    // =========================================================================
+    // Neighbour-side bias  (cluster-based)
+    // =========================================================================
+
+    /// <summary>
+    /// Groups labels whose anchors are within <c>3 × medianLabelHeight</c> of each
+    /// other (union-find), then decides preferLeft once per cluster by counting
+    /// how many external-cluster anchors lie to the right vs left within a search
+    /// radius of <c>6 × medianLabelHeight</c>.  All labels in a cluster share the
+    /// same preferLeft flag so they consistently go to the same side.
+    /// </summary>
+    private static bool[] ComputePreferLeft(List<LabelState> labels)
+    {
+        int n = labels.Count;
+
+        // Median label height → thresholds.
+        double[] hs = new double[n];
+        for (int i = 0; i < n; i++) hs[i] = labels[i].Height;
+        Array.Sort(hs);
+        double medH      = hs[n / 2];
+        double clusterR2 = Math.Pow(3.0 * medH, 2);
+        double searchR2  = Math.Pow(6.0 * medH, 2);
+
+        // Union-Find.
+        int[] par = new int[n];
+        for (int i = 0; i < n; i++) par[i] = i;
+
+        int Find(int x)
+        {
+            while (par[x] != x) { par[x] = par[par[x]]; x = par[x]; }
+            return x;
+        }
+
+        for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+        {
+            double dx = labels[i].Anchor.X - labels[j].Anchor.X;
+            double dy = labels[i].Anchor.Y - labels[j].Anchor.Y;
+            if (dx * dx + dy * dy <= clusterR2)
+            {
+                int ri = Find(i), rj = Find(j);
+                if (ri != rj) par[rj] = ri;
+            }
+        }
+
+        // Cluster centroid (sum of anchor positions, keyed by root).
+        var sumX = new Dictionary<int, double>();
+        var sumY = new Dictionary<int, double>();
+        var cnt  = new Dictionary<int, int>();
+        for (int i = 0; i < n; i++)
+        {
+            int r = Find(i);
+            if (!cnt.ContainsKey(r)) { sumX[r] = 0; sumY[r] = 0; cnt[r] = 0; }
+            sumX[r] += labels[i].Anchor.X;
+            sumY[r] += labels[i].Anchor.Y;
+            cnt[r]  += 1;
+        }
+        var cxMap = new Dictionary<int, double>();
+        var cyMap = new Dictionary<int, double>();
+        foreach (int r in cnt.Keys)
+        {
+            cxMap[r] = sumX[r] / cnt[r];
+            cyMap[r] = sumY[r] / cnt[r];
+        }
+
+        // Vote: for each cluster root, count external labels to left / right.
+        var leftVote  = new Dictionary<int, int>();
+        var rightVote = new Dictionary<int, int>();
+        foreach (int r in cnt.Keys) { leftVote[r] = 0; rightVote[r] = 0; }
+
+        for (int j = 0; j < n; j++)
+        {
+            int rj = Find(j);
+            foreach (int r in cnt.Keys)
+            {
+                if (r == rj) continue;
+                double dx = labels[j].Anchor.X - cxMap[r];
+                double dy = labels[j].Anchor.Y - cyMap[r];
+                if (dx * dx + dy * dy <= searchR2)
+                {
+                    if      (dx > 0) rightVote[r]++;
+                    else if (dx < 0) leftVote[r]++;
+                }
+            }
+        }
+
+        bool[] result = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            int r = Find(i);
+            result[i] = rightVote[r] > leftVote[r];
+        }
+        return result;
     }
 
     // =========================================================================
