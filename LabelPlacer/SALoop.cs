@@ -203,7 +203,8 @@ public sealed class SALoop
         PlacerConfig cfg,
         Random? rng = null,
         double[]? maxAbsY = null,
-        int[]? anchorOrder = null)
+        int[]? anchorOrder = null,
+        int[]? nextConstraintRank = null)
     {
         if (labels.Count == 0)
             return new SAResult(Array.Empty<Vector2D>(), 0, 0, 0, true, false, 0, 0, 0);
@@ -269,6 +270,11 @@ public sealed class SALoop
             for (int k = 0; k < anchorOrder.Length; k++)
                 rankOf[anchorOrder[k]] = k;
         }
+
+        // nextConstraintRank[k] = first rank j > k where anchor Y differs from rank k.
+        // This ensures blocks with same-Y neighbours (skipped pairs in old code) still get
+        // an ordering constraint, fixing the "orphaned block" bug.
+        int[]? ncr = nextConstraintRank;
 
         // -----------------------------------------------------------------------
         // Main SA loop
@@ -357,7 +363,7 @@ public sealed class SALoop
             // drifting above higher-anchor block). SA can still accept such moves at high
             // temperature (escapes deadlocks), but avoids them at low temperature.
             if (rankOf != null)
-                dE += OrderingDelta(anchorOrder!, rankOf, labels, idx, newOffI, isSwap, swapJ, newOffJ, activeCfg);
+                dE += OrderingDelta(anchorOrder!, ncr!, rankOf, labels, idx, newOffI, isSwap, swapJ, newOffJ, activeCfg);
 
             // --- Metropolis accept/reject ---
             bool accept = dE < 0.0 || rng.NextDouble() < Math.Exp(-dE / temp);
@@ -406,10 +412,16 @@ public sealed class SALoop
                     // Recompute energy with Stage B weights so bestEnergy is on the same scale.
                     energy = EnergyDelta.ComputeGlobal(labels, groups, activeCfg);
                     if (rankOf != null)
-                        energy += OrderingEnergy(anchorOrder!, labels, activeCfg);
+                        energy += OrderingEnergy(anchorOrder!, ncr!, labels, activeCfg);
                     bestEnergy = energy;
                     bestOffsets = Snapshot(labels);
                     itersSinceBest = 0;
+                    // Reheat so Stage B has thermal energy to pull labels back toward anchors.
+                    if (cfg.StageBReheatFraction > 0.0)
+                    {
+                        double stageBTemp = t0 * cfg.StageBReheatFraction;
+                        if (stageBTemp > temp) temp = stageBTemp;
+                    }
                 }
 
                 OnProgress?.Invoke(iter, temp, energy, overlapArea);
@@ -434,7 +446,7 @@ public sealed class SALoop
             {
                 double trueEnergy = EnergyDelta.ComputeGlobal(labels, groups, activeCfg);
                 if (rankOf != null)
-                    trueEnergy += OrderingEnergy(anchorOrder!, labels, activeCfg);
+                    trueEnergy += OrderingEnergy(anchorOrder!, ncr!, labels, activeCfg);
                 OnEnergyAudit(iter, energy, trueEnergy, energy - trueEnergy);
             }
 
@@ -500,12 +512,16 @@ public sealed class SALoop
 
         // Always build anchor order — soft ordering penalty applies regardless of EnforceAnchorOrder.
         int[] order = BuildAnchorOrder(blockLabels);
+        // nextConstraintRank[k] = first rank j > k where anchor Y differs from rank k.
+        // This ensures every block has an ordering constraint even when consecutive
+        // blocks share the same anchor Y.
+        int[] nextConstraintRank = BuildNextConstraintRank(order, blockLabels);
 
         double blockMaxAbsY = ComputeBlockMaxAbsY(blockLabels, cfg);
         var blockMaxAbsYs = new double[blockLabels.Count];
         for (int i = 0; i < blockLabels.Count; i++) blockMaxAbsYs[i] = blockMaxAbsY;
 
-        SAResult blockResult = RunInternal(blockLabels, cfg, rng, blockMaxAbsYs, order);
+        SAResult blockResult = RunInternal(blockLabels, cfg, rng, blockMaxAbsYs, order, nextConstraintRank);
 
         // Apply block offsets to all member labels (stacked at the same anchor/offset).
         foreach (LabelBlock block in blocks)
@@ -679,8 +695,7 @@ public sealed class SALoop
             // Use one full label diagonal as warmup step amplitude.
             double diag = LabelDiag(label);
             double dy = (rng.NextDouble() * 2 - 1) * diag;
-            var off = new Vector2D(0.0,
-                                       label.CurrentOffset.Y + dy);
+            var off = new Vector2D(0.0, label.CurrentOffset.Y + dy);
             off = ClampY(off, maxAbsY[idx]);
 
             Rect2D old = label.GetBoundingRect();
@@ -895,9 +910,10 @@ public sealed class SALoop
         double dOverlap = cfg.Alpha * (dOverlapI + dOverlapJ);
         double dDispI = EnergyDelta.DDisplacement(li.CurrentOffset, newOffI, cfg);
         double dDispJ = EnergyDelta.DDisplacement(lj.CurrentOffset, newOffJ, cfg);
+        double dLeader = EnergyDelta.DLeaderAwarenessSwap(idx, jdx, newOffI, newOffJ, labels, cfg);
         // dGroup = 0: swapping two members leaves group sums invariant.
 
-        return dOverlap + dDispI + dDispJ;
+        return dOverlap + dDispI + dDispJ + dLeader;
     }
 
     // -------------------------------------------------------------------------
@@ -929,12 +945,16 @@ public sealed class SALoop
             Alpha = cfg.AlphaStageB,
             BetaX = cfg.BetaXStageB,
             BetaY = cfg.BetaYStageB,
+            BetaX2 = cfg.BetaX2StageB,
+            BetaY2 = cfg.BetaY2StageB,
             Gamma = cfg.GammaStageB,
 
             // Stage B weights (same as source — unused in stage B config itself)
             AlphaStageB = cfg.AlphaStageB,
             BetaXStageB = cfg.BetaXStageB,
             BetaYStageB = cfg.BetaYStageB,
+            BetaX2StageB = cfg.BetaX2StageB,
+            BetaY2StageB = cfg.BetaY2StageB,
             GammaStageB = cfg.GammaStageB,
 
             CoolingRate = cfg.CoolingRate,
@@ -954,10 +974,15 @@ public sealed class SALoop
             MoveWeightSwap = cfg.MoveWeightSwap,
             WarmupSamples = cfg.WarmupSamples,
             WarmupTargetAcceptance = cfg.WarmupTargetAcceptance,
+            StageBReheatFraction = cfg.StageBReheatFraction,
             // In Stage B, activate the ordering constraint so that leader-line crossings
             // are penalised once overlaps have been cleared.
             OrderingPenaltyWeight = cfg.OrderingPenaltyWeightStageB,
             OrderingPenaltyWeightStageB = cfg.OrderingPenaltyWeightStageB,
+            LeaderLabelPenaltyWeight = cfg.LeaderLabelPenaltyWeightStageB,
+            LeaderLabelPenaltyWeightStageB = cfg.LeaderLabelPenaltyWeightStageB,
+            LeaderLeaderPenaltyWeight = cfg.LeaderLeaderPenaltyWeightStageB,
+            LeaderLeaderPenaltyWeightStageB = cfg.LeaderLeaderPenaltyWeightStageB,
         };
     }
 
@@ -967,21 +992,21 @@ public sealed class SALoop
 
     /// <summary>
     /// Returns the total ordering-violation energy for the current block positions.
-    /// Violation for adjacent pair (k, k+1): max(0, centerY[k] - centerY[k+1])
-    /// (block k should be BELOW block k+1 in anchor-Y order).
+    /// For each block k, checks the pair (k, nextConstraintRank[k]) where
+    /// nextConstraintRank[k] is the first rank after k with a different anchor Y.
+    /// This ensures every block has an ordering constraint, even when adjacent pairs
+    /// share the same anchor Y (which would be skipped under naive adjacent-pair logic).
     /// O(n) in the number of blocks.
     /// </summary>
-    private static double OrderingEnergy(int[] order, List<LabelState> labels, PlacerConfig cfg)
+    private static double OrderingEnergy(int[] order, int[] nextConstraintRank, List<LabelState> labels, PlacerConfig cfg)
     {
         double total = 0.0;
-        for (int k = 0; k < order.Length - 1; k++)
+        for (int k = 0; k < order.Length; k++)
         {
+            int nextK = nextConstraintRank[k];
+            if (nextK < 0) continue;
             LabelState a = labels[order[k]];
-            LabelState b = labels[order[k + 1]];
-            // Only enforce ordering between blocks at strictly different anchor Ys.
-            // Blocks at the same anchor Y (e.g., two labels in the same row) can move
-            // freely relative to each other without semantic crossing.
-            if (Math.Abs(a.Anchor.Y - b.Anchor.Y) < 1e-9) continue;
+            LabelState b = labels[order[nextK]];
             double cy_a = a.Anchor.Y + a.CurrentOffset.Y;
             double cy_b = b.Anchor.Y + b.CurrentOffset.Y;
             total += Math.Max(0.0, cy_a - cy_b);
@@ -992,10 +1017,13 @@ public sealed class SALoop
     /// <summary>
     /// Incremental ordering energy delta for a proposed move of block <paramref name="idx"/>
     /// (and optionally a swap partner <paramref name="swapJ"/>).
-    /// Only the at-most-4 adjacent pairs that involve the moved block(s) are recomputed.
+    /// Iterates over all constraint pairs (k, nextConstraintRank[k]) and recomputes only
+    /// those that involve the moved block(s).
+    /// O(n) per call — acceptable since block count is small.
     /// </summary>
     private static double OrderingDelta(
         int[] order,
+        int[] nextConstraintRank,
         int[] rankOf,
         List<LabelState> labels,
         int idx,
@@ -1005,51 +1033,60 @@ public sealed class SALoop
         Vector2D newOffJ,
         PlacerConfig cfg)
     {
-        // Effective center Y of block at rank k, considering the proposed move.
-        double NewCY(int k)
-        {
-            int li = order[k];
-            if (li == idx)             return labels[li].Anchor.Y + newOffI.Y;
-            if (isSwap && li == swapJ) return labels[li].Anchor.Y + newOffJ.Y;
-            return labels[li].Anchor.Y + labels[li].CurrentOffset.Y;
-        }
-        double OldCY(int k)
-            => labels[order[k]].Anchor.Y + labels[order[k]].CurrentOffset.Y;
-        // Returns true if pair (k, k+1) should be skipped (same anchor Y — no ordering needed).
-        bool SameAnchorY(int k)
-            => Math.Abs(labels[order[k]].Anchor.Y - labels[order[k + 1]].Anchor.Y) < 1e-9;
-
-        // Collect the unique pair indices affected by this move.
-        // Pair k spans (order[k], order[k+1]).
-        int n = order.Length;
-        int ri = rankOf[idx];
-        int rj = isSwap ? rankOf[swapJ] : -1;
-
-        // Use a small fixed-size check instead of HashSet (at most 4 pairs).
-        int p0 = ri > 0     ? ri - 1 : -1;
-        int p1 = ri < n - 1 ? ri     : -1;
-        int p2 = rj > 0     ? rj - 1 : -1;
-        int p3 = rj >= 0 && rj < n - 1 ? rj : -1;
-
-        // Check at most 4 unique pair indices; use a simple seen-check to dedup.
         double delta = 0.0;
-        int seen0 = -1, seen1 = -1, seen2 = -1;
-        int seenCount = 0;
-        int[] pairCandidates = { p0, p1, p2, p3 };
-        foreach (int k in pairCandidates)
+        for (int k = 0; k < order.Length; k++)
         {
-            if (k < 0) continue;
-            if (k == seen0 || k == seen1 || k == seen2) continue;
-            if      (seenCount == 0) seen0 = k;
-            else if (seenCount == 1) seen1 = k;
-            else                     seen2 = k;
-            seenCount++;
+            int nextK = nextConstraintRank[k];
+            if (nextK < 0) continue;
 
-            if (SameAnchorY(k)) continue;  // no ordering between same-Y anchors
-            double oldViol = Math.Max(0.0, OldCY(k) - OldCY(k + 1));
-            double newViol = Math.Max(0.0, NewCY(k) - NewCY(k + 1));
+            int a = order[k];
+            int b = order[nextK];
+
+            bool aChanged = (a == idx) || (isSwap && a == swapJ);
+            bool bChanged = (b == idx) || (isSwap && b == swapJ);
+            if (!aChanged && !bChanged) continue;
+
+            double oldCY_a = labels[a].Anchor.Y + labels[a].CurrentOffset.Y;
+            double oldCY_b = labels[b].Anchor.Y + labels[b].CurrentOffset.Y;
+            double oldViol = Math.Max(0.0, oldCY_a - oldCY_b);
+
+            double newCY_a = oldCY_a;
+            double newCY_b = oldCY_b;
+            if (a == idx)             newCY_a = labels[a].Anchor.Y + newOffI.Y;
+            if (isSwap && a == swapJ) newCY_a = labels[a].Anchor.Y + newOffJ.Y;
+            if (b == idx)             newCY_b = labels[b].Anchor.Y + newOffI.Y;
+            if (isSwap && b == swapJ) newCY_b = labels[b].Anchor.Y + newOffJ.Y;
+            double newViol = Math.Max(0.0, newCY_a - newCY_b);
+
             delta += newViol - oldViol;
         }
         return cfg.OrderingPenaltyWeight * delta;
+    }
+
+    /// <summary>
+    /// For each rank k, finds the first rank j &gt; k where the anchor Y of order[j]
+    /// differs from the anchor Y of order[k].
+    /// Returns -1 when no such rank exists.
+    /// This ensures every block has an ordering constraint, even when consecutive
+    /// blocks share the same anchor Y (which would otherwise be skipped).
+    /// </summary>
+    private static int[] BuildNextConstraintRank(int[] order, List<LabelState> labels)
+    {
+        int n = order.Length;
+        int[] next = new int[n];
+        for (int k = 0; k < n; k++)
+        {
+            next[k] = -1;
+            double anchorY = labels[order[k]].Anchor.Y;
+            for (int j = k + 1; j < n; j++)
+            {
+                if (Math.Abs(labels[order[j]].Anchor.Y - anchorY) >= 1e-9)
+                {
+                    next[k] = j;
+                    break;
+                }
+            }
+        }
+        return next;
     }
 }

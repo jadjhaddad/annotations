@@ -164,8 +164,15 @@ static class Program
             StagnationIterations = 20000,
             Alpha = 6000.0,
             AlphaStageB = 5000.0,
-            BetaY = 50.0,
-            BetaYStageB = 200.0,
+            BetaY = 60.0,
+            BetaYStageB = 300.0,
+            BetaY2 = 0.2,
+            BetaY2StageB = 4.0,
+            StageBReheatFraction = 0.002,
+            LeaderLabelPenaltyWeight = 50.0,
+            LeaderLabelPenaltyWeightStageB = 300.0,
+            LeaderLeaderPenaltyWeight = 100.0,
+            LeaderLeaderPenaltyWeightStageB = 1000.0,
             MaxBlockDisplacementFactor = 5.0,
         };
         var labels = new List<LabelState>();
@@ -192,12 +199,19 @@ static class Program
     {
         var cfg = new PlacerConfig
         {
-            CoolingRate = 0.9995,
+            CoolingRate = 0.9998,
             StagnationIterations = 20000,
             Alpha = 6000.0,
             AlphaStageB = 5000.0,
-            BetaY = 50.0,
-            BetaYStageB = 200.0,
+            BetaY = 80.0,
+            BetaYStageB = 500.0,
+            BetaY2 = 0.1,
+            BetaY2StageB = 2.0,
+            StageBReheatFraction = 0.002,
+            LeaderLabelPenaltyWeight = 60.0,
+            LeaderLabelPenaltyWeightStageB = 300.0,
+            LeaderLeaderPenaltyWeight = 100.0,
+            LeaderLeaderPenaltyWeightStageB = 1000.0,
             MaxBlockDisplacementFactor = 5.0,
         };
 

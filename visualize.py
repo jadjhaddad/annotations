@@ -120,6 +120,8 @@ def draw_state(ax, labels, title, show_handles=True):
         h       = lbl["height"]
         cx      = left + w / 2
         cy      = bottom + h / 2
+        lx      = left
+        ly      = cy
         is_ovlp = lbl["labelIndex"] in overlapping
 
         fill = RECT_FILL_OVLP if is_ovlp else RECT_FILL_OK
@@ -128,9 +130,9 @@ def draw_state(ax, labels, title, show_handles=True):
         # Anchor dot
         ax.plot(ax_x, ax_y, "o", color=ANCHOR_COLOR, markersize=4, zorder=5)
 
-        # Leader line from anchor to nearest rect edge (simple: to center)
-        if abs(cx - ax_x) > 0.01 or abs(cy - ax_y) > 0.01:
-            ax.plot([ax_x, cx], [ax_y, cy],
+        # Leader line from anchor to left-edge center of the label box.
+        if abs(lx - ax_x) > 0.01 or abs(ly - ax_y) > 0.01:
+            ax.plot([ax_x, lx], [ax_y, ly],
                     color=LEADER_COLOR, linewidth=0.7, linestyle="--", zorder=3)
 
         # Label rectangle

@@ -17,6 +17,12 @@ public sealed class PlacerConfig
     /// <summary>Vertical displacement penalty weight. Much larger than BetaX to prefer horizontal solutions.</summary>
     public double BetaY { get; set; } = 10.0;
 
+    /// <summary>Quadratic horizontal displacement penalty weight.</summary>
+    public double BetaX2 { get; set; } = 0.0;
+
+    /// <summary>Quadratic vertical displacement penalty weight.</summary>
+    public double BetaY2 { get; set; } = 0.0;
+
     /// <summary>Intragroup spread penalty weight.</summary>
     public double Gamma { get; set; } = 100.0;
 
@@ -31,6 +37,12 @@ public sealed class PlacerConfig
     /// <summary>BetaY in Stage B.</summary>
     public double BetaYStageB { get; set; } = 200.0;
 
+    /// <summary>Quadratic BetaX in Stage B.</summary>
+    public double BetaX2StageB { get; set; } = 0.0;
+
+    /// <summary>Quadratic BetaY in Stage B.</summary>
+    public double BetaY2StageB { get; set; } = 0.0;
+
     /// <summary>Gamma in Stage B.</summary>
     public double GammaStageB { get; set; } = 150.0;
 
@@ -41,6 +53,15 @@ public sealed class PlacerConfig
 
     /// <summary>Temperature at which the SA loop terminates.</summary>
     public double MinTemp { get; set; } = 0.01;
+
+    /// <summary>
+    /// When Stage A achieves zero overlap and transitions to Stage B, reheat
+    /// the temperature to T0 * StageBReheatFraction (if that value is above
+    /// the current temperature). This gives Stage B enough thermal energy to
+    /// pull labels back toward their anchors under the higher BetaY weights.
+    /// Set to 0 to disable (legacy behaviour: no reheat).
+    /// </summary>
+    public double StageBReheatFraction { get; set; } = 0.01;
 
     // --- Stopping ---
 
@@ -77,6 +98,29 @@ public sealed class PlacerConfig
     /// (which must still be able to clear any small overlaps reintroduced by displacement pull-back).
     /// </summary>
     public double OrderingPenaltyWeightStageB { get; set; } = 1000.0;
+
+    /// <summary>
+    /// Energy penalty per leader/label intersection in Stage A.
+    /// Applied when a leader segment intersects another label rectangle.
+    /// </summary>
+    public double LeaderLabelPenaltyWeight { get; set; } = 200.0;
+
+    /// <summary>
+    /// Energy penalty per leader/label intersection in Stage B.
+    /// Usually higher than Stage A so final layouts avoid running leaders through labels.
+    /// </summary>
+    public double LeaderLabelPenaltyWeightStageB { get; set; } = 6000.0;
+
+    /// <summary>
+    /// Energy penalty per leader/leader crossing in Stage A.
+    /// </summary>
+    public double LeaderLeaderPenaltyWeight { get; set; } = 500.0;
+
+    /// <summary>
+    /// Energy penalty per leader/leader crossing in Stage B.
+    /// Usually higher than Stage A so final layouts avoid leader path crossings.
+    /// </summary>
+    public double LeaderLeaderPenaltyWeightStageB { get; set; } = 20000.0;
 
 
     /// <summary>

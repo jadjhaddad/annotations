@@ -222,12 +222,14 @@ def render_svg(
     for r in sorted(rows, key=lambda x: x.label_index):
         ax = map_x(r.anchor_x)
         ay = map_y(r.anchor_y)
+        lx = map_x(r.left)
+        ly = map_y(r.center_y)
         cx = map_x(r.center_x)
         cy = map_y(r.center_y)
 
         if show_leaders:
             lines.append(
-                f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{cx:.2f}" y2="{cy:.2f}" '
+                f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{lx:.2f}" y2="{ly:.2f}" '
                 'stroke="#6b7280" stroke-opacity="0.35" stroke-width="1" />'
             )
 
@@ -370,7 +372,7 @@ def render_png(
     if show_leaders:
         for r in rows:
             ax.plot(
-                [r.anchor_x, r.center_x],
+                [r.anchor_x, r.left],
                 [r.anchor_y, r.center_y],
                 color="#6b7280",
                 alpha=0.35,
