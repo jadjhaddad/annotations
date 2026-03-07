@@ -214,8 +214,17 @@ namespace LabelPlacer.Civil3D
                     for (int slot = 0; slot < count; slot++)
                     {
                         var pt = tr.GetObject(points[members[slot]].id, OpenMode.ForWrite) as CogoPoint;
-                        if (pt == null) continue;
-                        pt.LabelLocation = new Point3d(colX, startY + slot * rowSpacing, pt.Location.Z);
+                        if (pt == null) { ed.WriteMessage($"  [WARN] slot {slot}: GetObject returned null\n"); continue; }
+
+                        var oldLoc = pt.LabelLocation;
+                        var newLoc = new Point3d(colX, startY + slot * rowSpacing, pt.Location.Z);
+                        pt.LabelLocation = newLoc;
+                        var afterLoc = pt.LabelLocation;
+
+                        ed.WriteMessage($"  pt#{slot}: anchor=({pt.Location.X:F2},{pt.Location.Y:F2})" +
+                                        $"  label {oldLoc.X:F2},{oldLoc.Y:F2}" +
+                                        $" -> {newLoc.X:F2},{newLoc.Y:F2}" +
+                                        $" (read-back: {afterLoc.X:F2},{afterLoc.Y:F2})\n");
                         moved++;
                     }
                 }
