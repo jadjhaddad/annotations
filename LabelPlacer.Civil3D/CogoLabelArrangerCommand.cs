@@ -143,8 +143,8 @@ namespace LabelPlacer.Civil3D
             medianNN = Math.Max(medianNN, 0.001);
 
             double clusterDist = medianNN * 1.5;   // group only truly close points
-            double columnGap   = medianNN * 2.0;   // column sits 2× point spacing from cluster
-            double rowSpacing  = medianNN * 0.6;   // rows spaced 60% of point spacing
+            double columnGap   = medianNN * 0.6;   // column sits 60% of point spacing from cluster edge
+            double rowSpacing  = medianNN * 0.5;   // rows spaced 50% of point spacing
 
             ed.WriteMessage($"  clusterDist={clusterDist:G4}  columnGap={columnGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
