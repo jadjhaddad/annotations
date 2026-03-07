@@ -111,9 +111,7 @@ namespace LabelPlacer.Civil3D
             if (n == 0) { ed.WriteMessage("\nNo COGO points found.\n"); return; }
             ed.WriteMessage($"  Read {n} point(s).\n");
 
-            // ── Median nearest-neighbour distance ─────────────────────────────
-            // This gives a distance that reflects the natural spacing between
-            // points, independent of total drawing extent.
+            // ── Nearest-neighbour distances (skip zero = duplicate coords) ────
             var nnDists = new List<double>(n);
             for (int i = 0; i < n; i++)
             {
@@ -124,26 +122,36 @@ namespace LabelPlacer.Civil3D
                     double dx = points[i].x - points[j].x;
                     double dy = points[i].y - points[j].y;
                     double sq = dx * dx + dy * dy;
-                    if (sq < bestSq) bestSq = sq;
+                    if (sq > 1e-12 && sq < bestSq) bestSq = sq;  // ignore exact duplicates
                 }
                 if (bestSq < double.MaxValue) nnDists.Add(Math.Sqrt(bestSq));
             }
             nnDists.Sort();
-            double medianNN = nnDists.Count > 0 ? nnDists[nnDists.Count / 2] : 10.0;
+            double medianNN = nnDists.Count > 0 ? nnDists[nnDists.Count / 2] : 0.0;
 
-            // ── Sizing ────────────────────────────────────────────────────────
-            // Prefer annotation-scale label height; fall back to 15% of median spacing.
-            double scaleH    = doc.Database.Dimtxt * GetAnnotationScale(doc);
-            double baseUnit  = (scaleH > medianNN * 0.01 && scaleH < medianNN * 0.8)
-                               ? scaleH
-                               : medianNN * 0.15;
-            // Cluster: only join points within 2× median nearest-neighbour
-            double clusterDist = medianNN * 2.0;
-            double columnGap   = baseUnit * 3.0;
-            double rowSpacing  = baseUnit * 1.8;
+            // ── Annotation scale (CANNOSCALEVALUE is most reliable in Civil 3D) ──
+            double scale = GetAnnotationScale(doc);
+            double scaleH = doc.Database.Dimtxt * scale;
+            ed.WriteMessage($"  annotScale={scale:G4}  Dimtxt={doc.Database.Dimtxt:G4}  scaleH={scaleH:G4}  medianNN={medianNN:G4}\n");
 
-            ed.WriteMessage($"  medianNN={medianNN:G4}  baseUnit={baseUnit:G4}\n");
-            ed.WriteMessage($"  clusterDist={clusterDist:G4}  columnGap={columnGap:G4}  rowSpacing={rowSpacing:G4}\n");
+            // ── Base unit: model-space label height ───────────────────────────
+            // Priority: scaleH (if sane) → fraction of medianNN → coordinate-based fallback
+            double baseUnit;
+            if (scaleH > 0.01 && (medianNN < 1e-6 || (scaleH > medianNN * 0.001 && scaleH < medianNN * 2.0)))
+                baseUnit = scaleH;
+            else if (medianNN > 1e-6)
+                baseUnit = medianNN * 0.3;
+            else
+                // Last resort: 0.01% of coordinate magnitude (works for state-plane etc.)
+                baseUnit = Math.Max(Math.Abs(points[0].x), Math.Abs(points[0].y)) * 0.0001;
+
+            baseUnit = Math.Max(baseUnit, 0.001);  // never zero
+
+            double clusterDist = Math.Max(medianNN * 1.5, baseUnit * 5.0);
+            double columnGap   = baseUnit * 4.0;
+            double rowSpacing  = baseUnit * 2.0;
+
+            ed.WriteMessage($"  baseUnit={baseUnit:G4}  clusterDist={clusterDist:G4}  columnGap={columnGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
             // ── Union-find clustering ─────────────────────────────────────────
             int[] par = new int[n];
@@ -263,14 +271,27 @@ namespace LabelPlacer.Civil3D
         /// </summary>
         private static double GetAnnotationScale(Document doc)
         {
+            // CANNOSCALEVALUE = paper/drawing ratio (e.g. 1:500 → 0.002)
+            // Invert to get model units per paper unit (e.g. 500)
             try
             {
-                var ocm   = doc.Database.ObjectContextManager;
-                var occ   = ocm?.GetContextCollection("ACDB_ANNOTATIONSCALES");
+                var val = Autodesk.AutoCAD.ApplicationServices.Application
+                              .GetSystemVariable("CANNOSCALEVALUE");
+                double ratio = Convert.ToDouble(val);
+                if (ratio > 1e-12) return 1.0 / ratio;
+            }
+            catch { }
+
+            // Fallback: ObjectContextManager
+            try
+            {
+                var ocm = doc.Database.ObjectContextManager;
+                var occ = ocm?.GetContextCollection("ACDB_ANNOTATIONSCALES");
                 if (occ?.CurrentContext is AnnotationScale s && s.PaperUnits > 0)
                     return s.DrawingUnits / s.PaperUnits;
             }
             catch { }
+
             return 1.0;
         }
     }
