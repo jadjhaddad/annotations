@@ -179,6 +179,12 @@ namespace LabelPlacer.Civil3D
             ed.WriteMessage($"  → {clusters.Count} cluster(s), largest has {largestCluster} pt(s)\n");
 
             // ── Place each cluster ────────────────────────────────────────────
+            // Small clusters (≤ MaxClusterStack): sort by Y, stack a neat column
+            //   to the RIGHT of the cluster bounding box.
+            // Large clusters: each point gets its own label offset from its own
+            //   anchor — avoids all leaders fanning to one distant column.
+            const int MaxClusterStack = 5;
+
             int moved = 0;
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
@@ -197,38 +203,48 @@ namespace LabelPlacer.Civil3D
                         if (points[i].y < minY) minY = points[i].y;
                         if (points[i].y > maxY) maxY = points[i].y;
                     }
-                    double cx = (minX + maxX) / 2.0;
                     double cy = (minY + maxY) / 2.0;
 
-                    // Prefer right; go left only when another cluster is close on the right
-                    bool goLeft = HasNeighbourClusters(kv.Key, clusters, points, maxX, clusterDist * 3);
-                    double colX = goLeft ? minX - columnGap : maxX + columnGap;
-
-                    // Sort by Y so leader lines stay parallel
+                    // Sort by Y so leader lines don't cross within the cluster
                     members.Sort((a, b) => points[a].y.CompareTo(points[b].y));
 
-                    // Centre the column on the cluster's Y midpoint
-                    double totalH = (count - 1) * rowSpacing;
-                    double startY = cy - totalH / 2.0;
-
-                    if (count > 1)
-                        ed.WriteMessage($"  Cluster: {count} pts centre=({cx:F1},{cy:F1})  colX={colX:F1}  startY={startY:F1}\n");
-
-                    for (int slot = 0; slot < count; slot++)
+                    if (count <= MaxClusterStack)
                     {
-                        var pt = tr.GetObject(points[members[slot]].id, OpenMode.ForWrite) as CogoPoint;
-                        if (pt == null) { ed.WriteMessage($"  [WARN] slot {slot}: GetObject returned null\n"); continue; }
+                        // ── Small cluster: shared column to the right ─────────
+                        double colX   = maxX + columnGap;
+                        double totalH = (count - 1) * rowSpacing;
+                        double startY = cy - totalH / 2.0;
 
-                        var oldLoc = pt.LabelLocation;
-                        var newLoc = new Point3d(colX, startY + slot * rowSpacing, pt.Location.Z);
-                        pt.LabelLocation = newLoc;
-                        var afterLoc = pt.LabelLocation;
+                        ed.WriteMessage($"  SmallCluster({count}): colX={colX:F1} startY={startY:F1}\n");
 
-                        ed.WriteMessage($"  pt#{slot}: anchor=({pt.Location.X:F2},{pt.Location.Y:F2})" +
-                                        $"  label {oldLoc.X:F2},{oldLoc.Y:F2}" +
-                                        $" -> {newLoc.X:F2},{newLoc.Y:F2}" +
-                                        $" (read-back: {afterLoc.X:F2},{afterLoc.Y:F2})\n");
-                        moved++;
+                        for (int slot = 0; slot < count; slot++)
+                        {
+                            var pt = tr.GetObject(points[members[slot]].id, OpenMode.ForWrite) as CogoPoint;
+                            if (pt == null) continue;
+                            pt.LabelLocation = new Point3d(colX, startY + slot * rowSpacing, pt.Location.Z);
+                            moved++;
+                        }
+                    }
+                    else
+                    {
+                        // ── Large / dense cluster: each point independently ────
+                        // Place each label directly to the right of its own anchor.
+                        // Stack labels that share the same anchor Y so they don't overlap.
+                        ed.WriteMessage($"  LargeCluster({count}): individual offsets\n");
+
+                        for (int slot = 0; slot < count; slot++)
+                        {
+                            int idx = members[slot];
+                            var pt = tr.GetObject(points[idx].id, OpenMode.ForWrite) as CogoPoint;
+                            if (pt == null) continue;
+
+                            // Each label goes right of its own anchor; use slot index for
+                            // a slight Y stagger so duplicate-coord labels don't overlap.
+                            double labelX = points[idx].x + columnGap;
+                            double labelY = points[idx].y + (slot - count / 2.0) * rowSpacing * 0.4;
+                            pt.LabelLocation = new Point3d(labelX, labelY, pt.Location.Z);
+                            moved++;
+                        }
                     }
                 }
 
@@ -238,26 +254,6 @@ namespace LabelPlacer.Civil3D
             Autodesk.AutoCAD.ApplicationServices.Application.UpdateScreen();
             doc.Editor.Regen();
             ed.WriteMessage($"\nCOGO label stacking complete — moved {moved} label(s).\n");
-        }
-
-        // ── Helpers ───────────────────────────────────────────────────────────
-
-        /// <summary>Returns true if there are clustered points to the right of this cluster.</summary>
-        private static bool HasNeighbourClusters(
-            int thisRoot,
-            Dictionary<int, List<int>> clusters,
-            List<(ObjectId id, double x, double y)> points,
-            double thisMaxX,
-            double searchDist)
-        {
-            foreach (var kv in clusters)
-            {
-                if (kv.Key == thisRoot) continue;
-                foreach (int j in kv.Value)
-                    if (points[j].x > thisMaxX && points[j].x - thisMaxX < searchDist)
-                        return true;
-            }
-            return false;
         }
 
         /// <summary>
