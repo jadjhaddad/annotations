@@ -129,29 +129,24 @@ namespace LabelPlacer.Civil3D
             nnDists.Sort();
             double medianNN = nnDists.Count > 0 ? nnDists[nnDists.Count / 2] : 0.0;
 
-            // ── Annotation scale (CANNOSCALEVALUE is most reliable in Civil 3D) ──
-            double scale = GetAnnotationScale(doc);
+            // ── Scale info (logged only — not used for layout) ────────────────
+            double scale  = GetAnnotationScale(doc);
             double scaleH = doc.Database.Dimtxt * scale;
             ed.WriteMessage($"  annotScale={scale:G4}  Dimtxt={doc.Database.Dimtxt:G4}  scaleH={scaleH:G4}  medianNN={medianNN:G4}\n");
 
-            // ── Base unit: model-space label height ───────────────────────────
-            // Priority: scaleH (if sane) → fraction of medianNN → coordinate-based fallback
-            double baseUnit;
-            if (scaleH > 0.01 && (medianNN < 1e-6 || (scaleH > medianNN * 0.001 && scaleH < medianNN * 2.0)))
-                baseUnit = scaleH;
-            else if (medianNN > 1e-6)
-                baseUnit = medianNN * 0.3;
-            else
-                // Last resort: 0.01% of coordinate magnitude (works for state-plane etc.)
-                baseUnit = Math.Max(Math.Abs(points[0].x), Math.Abs(points[0].y)) * 0.0001;
+            // ── Layout distances — derived from medianNN ──────────────────────
+            // medianNN is the measured typical spacing between nearby points in
+            // this drawing, so it's the most reliable spatial unit we have.
+            // If all points are duplicates (medianNN=0) fall back to coordinate magnitude.
+            if (medianNN < 1e-6)
+                medianNN = Math.Max(Math.Abs(points[0].x), Math.Abs(points[0].y)) * 0.0002;
+            medianNN = Math.Max(medianNN, 0.001);
 
-            baseUnit = Math.Max(baseUnit, 0.001);  // never zero
+            double clusterDist = medianNN * 1.5;   // group only truly close points
+            double columnGap   = medianNN * 2.0;   // column sits 2× point spacing from cluster
+            double rowSpacing  = medianNN * 0.6;   // rows spaced 60% of point spacing
 
-            double clusterDist = Math.Max(medianNN * 1.5, baseUnit * 5.0);
-            double columnGap   = baseUnit * 4.0;
-            double rowSpacing  = baseUnit * 2.0;
-
-            ed.WriteMessage($"  baseUnit={baseUnit:G4}  clusterDist={clusterDist:G4}  columnGap={columnGap:G4}  rowSpacing={rowSpacing:G4}\n");
+            ed.WriteMessage($"  clusterDist={clusterDist:G4}  columnGap={columnGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
             // ── Union-find clustering ─────────────────────────────────────────
             int[] par = new int[n];
