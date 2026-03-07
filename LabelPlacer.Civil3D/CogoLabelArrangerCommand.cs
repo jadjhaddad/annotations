@@ -95,81 +95,85 @@ namespace LabelPlacer.Civil3D
         {
             ed.WriteMessage($"\nProcessing {pointIds.Length} point(s)...\n");
 
-            // ── Read anchor positions first ───────────────────────────────────
+            // ── Read anchor positions ─────────────────────────────────────────
             var points = new List<(ObjectId id, double x, double y)>();
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
                 foreach (ObjectId id in pointIds)
                 {
-                    CogoPoint pt = tr.GetObject(id, OpenMode.ForRead) as CogoPoint;
-                    if (pt == null) continue;
-                    points.Add((id, pt.Location.X, pt.Location.Y));
+                    var pt = tr.GetObject(id, OpenMode.ForRead) as CogoPoint;
+                    if (pt != null) points.Add((id, pt.Location.X, pt.Location.Y));
                 }
                 tr.Commit();
             }
 
-            if (points.Count == 0) { ed.WriteMessage("\nNo COGO points found in transaction.\n"); return; }
+            int n = points.Count;
+            if (n == 0) { ed.WriteMessage("\nNo COGO points found.\n"); return; }
+            ed.WriteMessage($"  Read {n} point(s).\n");
 
-            // ── Derive sizing from actual point spread ────────────────────────
-            // This guarantees visible offsets regardless of drawing scale/units.
-            double allMinX = double.MaxValue, allMaxX = double.MinValue;
-            double allMinY = double.MaxValue, allMaxY = double.MinValue;
-            foreach (var p in points)
+            // ── Median nearest-neighbour distance ─────────────────────────────
+            // This gives a distance that reflects the natural spacing between
+            // points, independent of total drawing extent.
+            var nnDists = new List<double>(n);
+            for (int i = 0; i < n; i++)
             {
-                if (p.x < allMinX) allMinX = p.x;
-                if (p.x > allMaxX) allMaxX = p.x;
-                if (p.y < allMinY) allMinY = p.y;
-                if (p.y > allMaxY) allMaxY = p.y;
+                double bestSq = double.MaxValue;
+                for (int j = 0; j < n; j++)
+                {
+                    if (i == j) continue;
+                    double dx = points[i].x - points[j].x;
+                    double dy = points[i].y - points[j].y;
+                    double sq = dx * dx + dy * dy;
+                    if (sq < bestSq) bestSq = sq;
+                }
+                if (bestSq < double.MaxValue) nnDists.Add(Math.Sqrt(bestSq));
             }
-            double spread = Math.Max(allMaxX - allMinX, allMaxY - allMinY);
+            nnDists.Sort();
+            double medianNN = nnDists.Count > 0 ? nnDists[nnDists.Count / 2] : 10.0;
 
-            // Also try annotation scale × Dimtxt as a cross-check
-            double scale  = GetAnnotationScale(doc);
-            double scaleH = doc.Database.Dimtxt * scale;
+            // ── Sizing ────────────────────────────────────────────────────────
+            // Prefer annotation-scale label height; fall back to 15% of median spacing.
+            double scaleH    = doc.Database.Dimtxt * GetAnnotationScale(doc);
+            double baseUnit  = (scaleH > medianNN * 0.01 && scaleH < medianNN * 0.8)
+                               ? scaleH
+                               : medianNN * 0.15;
+            // Cluster: only join points within 2× median nearest-neighbour
+            double clusterDist = medianNN * 2.0;
+            double columnGap   = baseUnit * 3.0;
+            double rowSpacing  = baseUnit * 1.8;
 
-            // Use whichever gives a more meaningful unit (prefer scale-based if
-            // it is at least 0.5% of spread; otherwise fall back to spread-based)
-            double baseUnit = (scaleH > spread * 0.005 && scaleH > 1e-6)
-                ? scaleH
-                : Math.Max(spread * 0.015, 1.0);   // 1.5% of spread, ≥ 1 drawing unit
+            ed.WriteMessage($"  medianNN={medianNN:G4}  baseUnit={baseUnit:G4}\n");
+            ed.WriteMessage($"  clusterDist={clusterDist:G4}  columnGap={columnGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
-            double rowSpacing  = baseUnit * 2.5;
-            double clusterDist = baseUnit * 8.0;
-            double columnGap   = baseUnit * 4.0;
-
-            ed.WriteMessage($"  spread={spread:G4}, baseUnit={baseUnit:G4}, " +
-                            $"rowSpacing={rowSpacing:G4}, columnGap={columnGap:G4}\n");
-
-            // ── Cluster by proximity (union-find) ─────────────────────────────
-            int   n   = points.Count;
+            // ── Union-find clustering ─────────────────────────────────────────
             int[] par = new int[n];
             for (int i = 0; i < n; i++) par[i] = i;
-
             int Find(int x) { while (par[x] != x) { par[x] = par[par[x]]; x = par[x]; } return x; }
 
-            double d2 = clusterDist * clusterDist;
+            double cd2 = clusterDist * clusterDist;
             for (int i = 0; i < n; i++)
             for (int j = i + 1; j < n; j++)
             {
                 double dx = points[i].x - points[j].x;
                 double dy = points[i].y - points[j].y;
-                if (dx * dx + dy * dy <= d2)
+                if (dx * dx + dy * dy <= cd2)
                 {
                     int ri = Find(i), rj = Find(j);
                     if (ri != rj) par[rj] = ri;
                 }
             }
 
-            // Group labels by cluster root
             var clusters = new Dictionary<int, List<int>>();
             for (int i = 0; i < n; i++)
             {
                 int r = Find(i);
-                if (!clusters.ContainsKey(r)) clusters[r] = new List<int>();
-                clusters[r].Add(i);
+                if (!clusters.TryGetValue(r, out var lst)) clusters[r] = lst = new List<int>();
+                lst.Add(i);
             }
 
-            ed.WriteMessage($"  {points.Count} pts → {clusters.Count} cluster(s)\n");
+            int largestCluster = 0;
+            foreach (var kv in clusters) if (kv.Value.Count > largestCluster) largestCluster = kv.Value.Count;
+            ed.WriteMessage($"  → {clusters.Count} cluster(s), largest has {largestCluster} pt(s)\n");
 
             // ── Place each cluster ────────────────────────────────────────────
             int moved = 0;
@@ -178,8 +182,9 @@ namespace LabelPlacer.Civil3D
                 foreach (var kv in clusters)
                 {
                     List<int> members = kv.Value;
+                    int count = members.Count;
 
-                    // Bounding box of anchor positions in this cluster
+                    // Bounding box of this cluster's anchors
                     double minX = double.MaxValue, maxX = double.MinValue;
                     double minY = double.MaxValue, maxY = double.MinValue;
                     foreach (int i in members)
@@ -189,35 +194,28 @@ namespace LabelPlacer.Civil3D
                         if (points[i].y < minY) minY = points[i].y;
                         if (points[i].y > maxY) maxY = points[i].y;
                     }
+                    double cx = (minX + maxX) / 2.0;
+                    double cy = (minY + maxY) / 2.0;
 
-                    // Decide side: prefer right unless more clusters sit to the right
+                    // Prefer right; go left only when another cluster is close on the right
                     bool goLeft = HasNeighbourClusters(kv.Key, clusters, points, maxX, clusterDist * 3);
-                    double colX = goLeft
-                        ? minX - columnGap
-                        : maxX + columnGap;
+                    double colX = goLeft ? minX - columnGap : maxX + columnGap;
 
-                    // Sort members by anchor Y ascending so leaders don't cross
+                    // Sort by Y so leader lines stay parallel
                     members.Sort((a, b) => points[a].y.CompareTo(points[b].y));
 
-                    // Center the label column vertically on the cluster
-                    int    count   = members.Count;
-                    double totalH  = (count - 1) * rowSpacing;
-                    double startY  = (minY + maxY) / 2.0 - totalH / 2.0;
+                    // Centre the column on the cluster's Y midpoint
+                    double totalH = (count - 1) * rowSpacing;
+                    double startY = cy - totalH / 2.0;
 
-                    ed.WriteMessage($"  Cluster {kv.Key}: {count} pts, bbox=({minX:F1},{minY:F1})-({maxX:F1},{maxY:F1}), colX={colX:F1}, startY={startY:F1}\n");
+                    if (count > 1)
+                        ed.WriteMessage($"  Cluster: {count} pts centre=({cx:F1},{cy:F1})  colX={colX:F1}  startY={startY:F1}\n");
 
-                    // Write LabelLocation for each label
                     for (int slot = 0; slot < count; slot++)
                     {
-                        int     idx = members[slot];
-                        ObjectId id = points[idx].id;
-
-                        CogoPoint pt = tr.GetObject(id, OpenMode.ForWrite) as CogoPoint;
+                        var pt = tr.GetObject(points[members[slot]].id, OpenMode.ForWrite) as CogoPoint;
                         if (pt == null) continue;
-
-                        double labelY = startY + slot * rowSpacing;
-                        var newLoc = new Point3d(colX, labelY, pt.Location.Z);
-                        pt.LabelLocation = newLoc;
+                        pt.LabelLocation = new Point3d(colX, startY + slot * rowSpacing, pt.Location.Z);
                         moved++;
                     }
                 }
@@ -225,10 +223,8 @@ namespace LabelPlacer.Civil3D
                 tr.Commit();
             }
 
-            // Force display refresh
             Autodesk.AutoCAD.ApplicationServices.Application.UpdateScreen();
             doc.Editor.Regen();
-
             ed.WriteMessage($"\nCOGO label stacking complete — moved {moved} label(s).\n");
         }
 
