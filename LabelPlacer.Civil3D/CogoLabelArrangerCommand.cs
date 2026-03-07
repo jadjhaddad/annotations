@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -8,27 +7,15 @@ using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.Civil.ApplicationServices;
 using Autodesk.Civil.DatabaseServices;
-using LabelPlacer;
 
 [assembly: ExtensionApplication(null)]
 [assembly: CommandClass(typeof(LabelPlacer.Civil3D.CogoLabelArrangerCommands))]
 
 namespace LabelPlacer.Civil3D
 {
-    /// <summary>
-    /// Civil 3D commands that auto-arrange COGO point labels to minimise overlap.
-    ///
-    /// Commands
-    /// --------
-    ///   ARRANGECOGOSELECTED  — user selects COGO points, then labels are arranged
-    ///   ARRANGECOGOALL       — arranges every COGO point in the drawing
-    ///   ARRANGECOGOLABELS    — interactive: prompts Selection / All
-    /// </summary>
     public class CogoLabelArrangerCommands
     {
-        // ─────────────────────────────────────────────────────────────────────
-        // Commands
-        // ─────────────────────────────────────────────────────────────────────
+        // ── Commands ──────────────────────────────────────────────────────────
 
         [CommandMethod("ArrangeCogoLabels")]
         public void ArrangeCogoLabels()
@@ -49,45 +36,40 @@ namespace LabelPlacer.Civil3D
             bool useAll = pr.Status == PromptStatus.OK &&
                           pr.StringResult.Equals("All", StringComparison.OrdinalIgnoreCase);
 
-            if (useAll) RunOnAll(doc, ed);
-            else        RunOnSelection(doc, ed);
+            ObjectId[] ids = useAll ? CollectAllPoints(doc, ed) : CollectSelection(doc, ed);
+            if (ids != null && ids.Length > 0)
+                StackLabels(doc, ed, ids);
         }
 
         [CommandMethod("ArrangeCogoSelected")]
         public void ArrangeCogoSelected()
         {
-            Document doc = Application.DocumentManager.MdiActiveDocument;
-            RunOnSelection(doc, doc.Editor);
+            Document  doc = Application.DocumentManager.MdiActiveDocument;
+            ObjectId[] ids = CollectSelection(doc, doc.Editor);
+            if (ids != null && ids.Length > 0) StackLabels(doc, doc.Editor, ids);
         }
 
         [CommandMethod("ArrangeCogoAll")]
         public void ArrangeCogoAll()
         {
-            Document doc = Application.DocumentManager.MdiActiveDocument;
-            RunOnAll(doc, doc.Editor);
+            Document  doc = Application.DocumentManager.MdiActiveDocument;
+            ObjectId[] ids = CollectAllPoints(doc, doc.Editor);
+            if (ids != null && ids.Length > 0) StackLabels(doc, doc.Editor, ids);
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Selection helpers
-        // ─────────────────────────────────────────────────────────────────────
+        // ── Collection helpers ────────────────────────────────────────────────
 
-        private static void RunOnSelection(Document doc, Editor ed)
+        private static ObjectId[] CollectSelection(Document doc, Editor ed)
         {
-            TypedValue[]    filter = { new TypedValue((int)DxfCode.Start, "AECC_COGO_POINT") };
-            SelectionFilter sf     = new SelectionFilter(filter);
-
-            PromptSelectionOptions pso = new PromptSelectionOptions
-            {
-                MessageForAdding = "\nSelect COGO points to arrange: "
-            };
-
-            PromptSelectionResult psr = ed.GetSelection(pso, sf);
-            if (psr.Status != PromptStatus.OK) { ed.WriteMessage("\nNo selection. Cancelled.\n"); return; }
-
-            ArrangePoints(doc, ed, psr.Value.GetObjectIds());
+            var filter = new SelectionFilter(
+                new[] { new TypedValue((int)DxfCode.Start, "AECC_COGO_POINT") });
+            var pso = new PromptSelectionOptions { MessageForAdding = "\nSelect COGO points: " };
+            PromptSelectionResult psr = ed.GetSelection(pso, filter);
+            if (psr.Status != PromptStatus.OK) { ed.WriteMessage("\nCancelled.\n"); return null; }
+            return psr.Value.GetObjectIds();
         }
 
-        private static void RunOnAll(Document doc, Editor ed)
+        private static ObjectId[] CollectAllPoints(Document doc, Editor ed)
         {
             var ids = new List<ObjectId>();
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
@@ -96,123 +78,195 @@ namespace LabelPlacer.Civil3D
                     ids.Add(id);
                 tr.Commit();
             }
-
-            if (ids.Count == 0) { ed.WriteMessage("\nNo COGO points found in drawing.\n"); return; }
-
-            ArrangePoints(doc, ed, ids.ToArray());
+            if (ids.Count == 0) { ed.WriteMessage("\nNo COGO points found.\n"); return null; }
+            return ids.ToArray();
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Core placement logic
-        // ─────────────────────────────────────────────────────────────────────
+        // ── Core: column stacking ─────────────────────────────────────────────
 
-        private static void ArrangePoints(Document doc, Editor ed, ObjectId[] pointIds)
+        /// <summary>
+        /// Groups nearby COGO points into clusters, then stacks each cluster's
+        /// labels in a neat vertical column to one side — the survey-standard layout.
+        ///
+        /// All sizing is derived from the current annotation scale so it works
+        /// at any drawing scale without hard-coded values.
+        /// </summary>
+        private static void StackLabels(Document doc, Editor ed, ObjectId[] pointIds)
         {
-            if (pointIds == null || pointIds.Length == 0) return;
+            ed.WriteMessage($"\nProcessing {pointIds.Length} point(s)...\n");
 
-            ed.WriteMessage($"\nReading {pointIds.Length} COGO point(s)...\n");
-
-            var labels = new List<LabelState>(pointIds.Length);
-            var config = new PlacerConfig();
-
-            // ── 1. Read anchor positions and label dimensions ─────────────────
+            // ── Read anchor positions first ───────────────────────────────────
+            var points = new List<(ObjectId id, double x, double y)>();
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
                 foreach (ObjectId id in pointIds)
                 {
                     CogoPoint pt = tr.GetObject(id, OpenMode.ForRead) as CogoPoint;
                     if (pt == null) continue;
-
-                    Point3d anchor = pt.Location;
-                    double  w, h;
-                    LabelSizeSource src;
-
-                    if (TryGetLabelExtents(pt, out w, out h))
-                    {
-                        src = LabelSizeSource.ApiExtents;
-                    }
-                    else
-                    {
-                        // Estimate from point number + elevation text.
-                        string text       = pt.PointNumber + "\n" + pt.Elevation.ToString("F3");
-                        double textHeight = doc.Database.Dimtxt;
-                        (w, h) = LabelState.EstimateSize(text, textHeight, config);
-                        src    = LabelSizeSource.Estimated;
-                    }
-
-                    labels.Add(new LabelState(
-                        handle:     id,
-                        anchor:     new Point2D(anchor.X, anchor.Y),
-                        width:      w,
-                        height:     h,
-                        sizeSource: src));
+                    points.Add((id, pt.Location.X, pt.Location.Y));
                 }
                 tr.Commit();
             }
 
-            if (labels.Count == 0) { ed.WriteMessage("\nNo valid COGO points to process.\n"); return; }
+            if (points.Count == 0) { ed.WriteMessage("\nNo COGO points found in transaction.\n"); return; }
 
-            // ── 2. Run greedy placer ─────────────────────────────────────────
-            var sw = Stopwatch.StartNew();
-            GreedyResult result = GreedyPlacer.Place(labels);
-            sw.Stop();
+            // ── Derive sizing from actual point spread ────────────────────────
+            // This guarantees visible offsets regardless of drawing scale/units.
+            double allMinX = double.MaxValue, allMaxX = double.MinValue;
+            double allMinY = double.MaxValue, allMaxY = double.MinValue;
+            foreach (var p in points)
+            {
+                if (p.x < allMinX) allMinX = p.x;
+                if (p.x > allMaxX) allMaxX = p.x;
+                if (p.y < allMinY) allMinY = p.y;
+                if (p.y > allMaxY) allMaxY = p.y;
+            }
+            double spread = Math.Max(allMaxX - allMinX, allMaxY - allMinY);
 
-            ed.WriteMessage(
-                $"\nPlacement: {sw.ElapsedMilliseconds} ms | " +
-                $"Overlap pairs: {result.FinalOverlapPairs} | " +
-                $"Unplaced: {result.UnplacedCount} | " +
-                $"Sweeps: {result.RefinementSweeps}\n");
+            // Also try annotation scale × Dimtxt as a cross-check
+            double scale  = GetAnnotationScale(doc);
+            double scaleH = doc.Database.Dimtxt * scale;
 
-            // ── 3. Write back label positions ────────────────────────────────
-            // LabelPlacer convention:
-            //   CurrentOffset.X  = left-edge X offset from anchor
-            //   CurrentOffset.Y  = vertical-centre Y offset from anchor
-            //
-            // Civil 3D LabelLocation = bottom-left corner of label text bounding box.
-            //   → LabelLocation.X = anchor.X + offset.X
-            //   → LabelLocation.Y = anchor.Y + offset.Y - height/2
+            // Use whichever gives a more meaningful unit (prefer scale-based if
+            // it is at least 0.5% of spread; otherwise fall back to spread-based)
+            double baseUnit = (scaleH > spread * 0.005 && scaleH > 1e-6)
+                ? scaleH
+                : Math.Max(spread * 0.015, 1.0);   // 1.5% of spread, ≥ 1 drawing unit
+
+            double rowSpacing  = baseUnit * 2.5;
+            double clusterDist = baseUnit * 8.0;
+            double columnGap   = baseUnit * 4.0;
+
+            ed.WriteMessage($"  spread={spread:G4}, baseUnit={baseUnit:G4}, " +
+                            $"rowSpacing={rowSpacing:G4}, columnGap={columnGap:G4}\n");
+
+            // ── Cluster by proximity (union-find) ─────────────────────────────
+            int   n   = points.Count;
+            int[] par = new int[n];
+            for (int i = 0; i < n; i++) par[i] = i;
+
+            int Find(int x) { while (par[x] != x) { par[x] = par[par[x]]; x = par[x]; } return x; }
+
+            double d2 = clusterDist * clusterDist;
+            for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++)
+            {
+                double dx = points[i].x - points[j].x;
+                double dy = points[i].y - points[j].y;
+                if (dx * dx + dy * dy <= d2)
+                {
+                    int ri = Find(i), rj = Find(j);
+                    if (ri != rj) par[rj] = ri;
+                }
+            }
+
+            // Group labels by cluster root
+            var clusters = new Dictionary<int, List<int>>();
+            for (int i = 0; i < n; i++)
+            {
+                int r = Find(i);
+                if (!clusters.ContainsKey(r)) clusters[r] = new List<int>();
+                clusters[r].Add(i);
+            }
+
+            ed.WriteMessage($"  {points.Count} pts → {clusters.Count} cluster(s)\n");
+
+            // ── Place each cluster ────────────────────────────────────────────
+            int moved = 0;
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
-                foreach (LabelState ls in labels)
+                foreach (var kv in clusters)
                 {
-                    CogoPoint pt = tr.GetObject((ObjectId)ls.Handle, OpenMode.ForWrite) as CogoPoint;
-                    if (pt == null) continue;
+                    List<int> members = kv.Value;
 
-                    double newX = pt.Location.X + ls.CurrentOffset.X;
-                    double newY = pt.Location.Y + ls.CurrentOffset.Y - ls.Height / 2.0;
+                    // Bounding box of anchor positions in this cluster
+                    double minX = double.MaxValue, maxX = double.MinValue;
+                    double minY = double.MaxValue, maxY = double.MinValue;
+                    foreach (int i in members)
+                    {
+                        if (points[i].x < minX) minX = points[i].x;
+                        if (points[i].x > maxX) maxX = points[i].x;
+                        if (points[i].y < minY) minY = points[i].y;
+                        if (points[i].y > maxY) maxY = points[i].y;
+                    }
 
-                    pt.LabelLocation = new Point3d(newX, newY, pt.Location.Z);
+                    // Decide side: prefer right unless more clusters sit to the right
+                    bool goLeft = HasNeighbourClusters(kv.Key, clusters, points, maxX, clusterDist * 3);
+                    double colX = goLeft
+                        ? minX - columnGap
+                        : maxX + columnGap;
+
+                    // Sort members by anchor Y ascending so leaders don't cross
+                    members.Sort((a, b) => points[a].y.CompareTo(points[b].y));
+
+                    // Center the label column vertically on the cluster
+                    int    count   = members.Count;
+                    double totalH  = (count - 1) * rowSpacing;
+                    double startY  = (minY + maxY) / 2.0 - totalH / 2.0;
+
+                    ed.WriteMessage($"  Cluster {kv.Key}: {count} pts, bbox=({minX:F1},{minY:F1})-({maxX:F1},{maxY:F1}), colX={colX:F1}, startY={startY:F1}\n");
+
+                    // Write LabelLocation for each label
+                    for (int slot = 0; slot < count; slot++)
+                    {
+                        int     idx = members[slot];
+                        ObjectId id = points[idx].id;
+
+                        CogoPoint pt = tr.GetObject(id, OpenMode.ForWrite) as CogoPoint;
+                        if (pt == null) continue;
+
+                        double labelY = startY + slot * rowSpacing;
+                        var newLoc = new Point3d(colX, labelY, pt.Location.Z);
+                        pt.LabelLocation = newLoc;
+                        moved++;
+                    }
                 }
+
                 tr.Commit();
             }
 
-            ed.WriteMessage("\nCOGO label arrangement complete.\n");
+            // Force display refresh
+            Autodesk.AutoCAD.ApplicationServices.Application.UpdateScreen();
+            doc.Editor.Regen();
+
+            ed.WriteMessage($"\nCOGO label stacking complete — moved {moved} label(s).\n");
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Helpers
-        // ─────────────────────────────────────────────────────────────────────
+        // ── Helpers ───────────────────────────────────────────────────────────
+
+        /// <summary>Returns true if there are clustered points to the right of this cluster.</summary>
+        private static bool HasNeighbourClusters(
+            int thisRoot,
+            Dictionary<int, List<int>> clusters,
+            List<(ObjectId id, double x, double y)> points,
+            double thisMaxX,
+            double searchDist)
+        {
+            foreach (var kv in clusters)
+            {
+                if (kv.Key == thisRoot) continue;
+                foreach (int j in kv.Value)
+                    if (points[j].x > thisMaxX && points[j].x - thisMaxX < searchDist)
+                        return true;
+            }
+            return false;
+        }
 
         /// <summary>
-        /// Reads the label extents from the Civil 3D entity (includes label text).
-        /// Applies 5 % padding. Returns false if extents are degenerate.
+        /// Returns the current model-space annotation scale ratio.
+        /// Falls back to 1.0 if the scale cannot be read.
         /// </summary>
-        private static bool TryGetLabelExtents(CogoPoint pt, out double width, out double height)
+        private static double GetAnnotationScale(Document doc)
         {
-            width = height = 0;
             try
             {
-                Extents3d ext = pt.GeometricExtents;
-                double w = ext.MaxPoint.X - ext.MinPoint.X;
-                double h = ext.MaxPoint.Y - ext.MinPoint.Y;
-                if (w < 1e-6 || h < 1e-6) return false;
-
-                const double pad = 1.05;
-                width  = w * pad;
-                height = h * pad;
-                return true;
+                var ocm   = doc.Database.ObjectContextManager;
+                var occ   = ocm?.GetContextCollection("ACDB_ANNOTATIONSCALES");
+                if (occ?.CurrentContext is AnnotationScale s && s.PaperUnits > 0)
+                    return s.DrawingUnits / s.PaperUnits;
             }
-            catch { return false; }
+            catch { }
+            return 1.0;
         }
     }
 }
