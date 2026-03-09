@@ -246,11 +246,10 @@ namespace LabelPlacer.Civil3D
 
                 if (xConflicts.Count > 0)
                 {
-                    double maxDisp = Math.Max(medianNN * 1.5, blk.BlockH);
                     double clearY = FindClearY(
                         blk.LabelY, blk.BlockH,
                         blk.AnchorX, blk.AnchorY, blk.LabelX,
-                        xConflicts, labelH, maxDisp);
+                        xConflicts, labelH);
                     if (Math.Abs(clearY - blk.LabelY) > 1e-9)
                     {
                         blk.LabelY = clearY;
@@ -296,15 +295,9 @@ namespace LabelPlacer.Civil3D
         /// <param name="anchorX">X of this block's anchor (left edge of leader).</param>
         /// <param name="anchorY">Y of this block's anchor.</param>
         /// <param name="labelX">X of this block's label column (right edge of leader / left edge of text).</param>
-        /// <param name="maxDisp">
-        /// Maximum allowed displacement from <paramref name="startY"/>.
-        /// Candidates further away are skipped; <paramref name="startY"/> is returned so the
-        /// block stays near its anchor (accepting overlap over a long leader).
-        /// </param>
         private static double FindClearY(double startY, double blockH,
                                          double anchorX, double anchorY, double labelX,
-                                         List<LabelBlock> conflicts, double labelH,
-                                         double maxDisp = double.MaxValue)
+                                         List<LabelBlock> conflicts, double labelH)
         {
             double eps = labelH * 0.05;
             double mr  = labelH * 0.44; // ≈ AnchorMarkerSize/2 relative to labelH
@@ -324,22 +317,22 @@ namespace LabelPlacer.Civil3D
 
             // ── Leader corridor check ─────────────────────────────────────────────────────
             // For a candidate bottom Y, the leader runs from (anchorX, anchorY) to
-            // (labelX, candidateY..candidateY+blockH).  Reject the candidate if this
-            // corridor overlaps any placed block's label text rectangle.
+            // (labelX, candidateY..candidateY+blockH).  Returns false if this corridor
+            // overlaps any placed block's label text rectangle.
             bool LeaderClear(double cand)
             {
                 double ldXL = anchorX;
                 double ldXR = labelX;
                 if (ldXL >= ldXR) return true; // degenerate — no horizontal leader extent
 
-                double ldYL = Math.Min(anchorY, cand)         - eps;
+                double ldYL = Math.Min(anchorY, cand)          - eps;
                 double ldYH = Math.Max(anchorY, cand + blockH) + eps;
 
                 foreach (var c in conflicts)
                 {
                     if (c.Members.Count == 0) continue; // anchor marker — not text
-                    double cXL = c.LabelX,            cXR = c.LabelX + c.LabelW;
-                    double cYL = c.LabelY    - eps,   cYH = c.LabelY + c.BlockH + eps;
+                    double cXL = c.LabelX,           cXR = c.LabelX + c.LabelW;
+                    double cYL = c.LabelY    - eps,  cYH = c.LabelY + c.BlockH + eps;
                     if (ldXL < cXR && ldXR > cXL && ldYL < cYH && ldYH > cYL)
                         return false;
                 }
@@ -350,7 +343,7 @@ namespace LabelPlacer.Civil3D
             if (!OverlapsAny(startY, startY + blockH, occupied) && LeaderClear(startY))
                 return startY;
 
-            // Candidates: just above or just below each occupied interval
+            // Candidates: just above or just below each occupied interval, nearest first.
             var candidates = new List<double>(occupied.Count * 2);
             foreach (var (lo, hi) in occupied)
             {
@@ -359,14 +352,18 @@ namespace LabelPlacer.Civil3D
             }
             candidates.Sort((a, b) => Math.Abs(a - startY).CompareTo(Math.Abs(b - startY)));
 
+            // Pass 1: text clear AND leader corridor clear (ideal — no crossing).
             foreach (double cand in candidates)
-                if (Math.Abs(cand - startY) <= maxDisp
-                    && !OverlapsAny(cand, cand + blockH, occupied)
-                    && LeaderClear(cand))
+                if (!OverlapsAny(cand, cand + blockH, occupied) && LeaderClear(cand))
                     return cand;
 
-            // No fully clear position within maxDisp — accept overlap over a long leader
-            return startY;
+            // Pass 2: text clear only (leader may cross in very dense areas).
+            // Always prefer this over falling back to startY (which causes text-on-text overlap).
+            foreach (double cand in candidates)
+                if (!OverlapsAny(cand, cand + blockH, occupied))
+                    return cand;
+
+            return startY; // should not reach here
         }
 
         private static bool OverlapsAny(double lo, double hi,
