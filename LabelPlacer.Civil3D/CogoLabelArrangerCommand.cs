@@ -53,13 +53,7 @@ namespace LabelPlacer.Civil3D
         public void ArrangeCogoAll()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
-            string logPath = System.IO.Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.Desktop),
-                "LabelPlacer.log");
-            System.IO.File.WriteAllText(logPath, $"ArrangeCogoAll started {DateTime.Now}\n");
-            System.IO.File.AppendAllText(logPath, "Calling CollectAllPoints...\n");
             ObjectId[] ids = CollectAllPoints(doc, doc.Editor);
-            System.IO.File.AppendAllText(logPath, $"CollectAllPoints returned {ids?.Length ?? 0} points.\n");
             if (ids != null && ids.Length > 0) StackLabels(doc, doc.Editor, ids);
         }
 

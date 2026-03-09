@@ -84,11 +84,6 @@
     <None Include="packages.config" />
   </ItemGroup>
 
-  <!-- LabelPlacer engine: built first, output copied to bin\ -->
-  <ItemGroup>
-    <ProjectReference Include="..\LabelPlacer\LabelPlacer.csproj" />
-  </ItemGroup>
-
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 
   <!-- ── Bundle deployment ──────────────────────────────────────────────────
@@ -99,7 +94,6 @@
            PackageContents.xml
            Contents\
              LabelPlacer.Civil3D.dll
-             LabelPlacer.dll
   -->
   <Target Name="DeployBundle" AfterTargets="Build">
     <PropertyGroup>
@@ -107,9 +101,8 @@
       <BundleContents>$(BundleRoot)\Contents</BundleContents>
     </PropertyGroup>
     <MakeDir Directories="$(BundleContents)" />
-    <Copy SourceFiles="$(ProjectDir)PackageContents.xml"          DestinationFolder="$(BundleRoot)"    SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(OutputPath)LabelPlacer.Civil3D.dll"      DestinationFolder="$(BundleContents)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(OutputPath)LabelPlacer.dll"              DestinationFolder="$(BundleContents)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)PackageContents.xml"     DestinationFolder="$(BundleRoot)"     SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutputPath)LabelPlacer.Civil3D.dll" DestinationFolder="$(BundleContents)" SkipUnchangedFiles="true" />
     <Message Text="Bundle deployed → $(BundleRoot)" Importance="high" />
   </Target>
 
