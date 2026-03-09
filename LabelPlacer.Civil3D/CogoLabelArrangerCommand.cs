@@ -53,9 +53,13 @@ namespace LabelPlacer.Civil3D
         public void ArrangeCogoAll()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
-            doc.Editor.WriteMessage("\n[ArrangeCogoAll] Collecting points...\n");
+            string logPath = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.Desktop),
+                "LabelPlacer.log");
+            System.IO.File.WriteAllText(logPath, $"ArrangeCogoAll started {DateTime.Now}\n");
+            System.IO.File.AppendAllText(logPath, "Calling CollectAllPoints...\n");
             ObjectId[] ids = CollectAllPoints(doc, doc.Editor);
-            doc.Editor.WriteMessage($"\n[ArrangeCogoAll] Collected {ids?.Length ?? 0} points.\n");
+            System.IO.File.AppendAllText(logPath, $"CollectAllPoints returned {ids?.Length ?? 0} points.\n");
             if (ids != null && ids.Length > 0) StackLabels(doc, doc.Editor, ids);
         }
 
@@ -90,8 +94,16 @@ namespace LabelPlacer.Civil3D
         private static void StackLabels(Document doc, Editor ed, ObjectId[] pointIds)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            void Tick(string phase) =>
-                ed.WriteMessage($"  [{sw.Elapsed:mm\\:ss\\.f}] {phase}\n");
+            string logPath = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.Desktop),
+                "LabelPlacer.log");
+            System.IO.File.WriteAllText(logPath, $"LabelPlacer started {DateTime.Now}\n");
+            void Tick(string phase)
+            {
+                string line = $"[{sw.Elapsed:mm\\:ss\\.f}] {phase}\n";
+                ed.WriteMessage("  " + line);
+                System.IO.File.AppendAllText(logPath, line);
+            }
 
             ed.WriteMessage($"\nProcessing {pointIds.Length} point(s)...\n");
 
