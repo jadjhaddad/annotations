@@ -317,77 +317,39 @@ namespace LabelPlacer.Civil3D
                 double blkXL = blk.AnchorX;
                 double blkXR = blk.LabelX + blk.LabelW;
 
-                List<LabelBlock> BuildConflicts(double xL, double xR)
+                var xConflicts = new List<LabelBlock>();
+                foreach (var p in IndexQuery(blkXL, blkXR))
                 {
-                    var list = new List<LabelBlock>();
-                    foreach (var p in IndexQuery(xL, xR))
-                    {
-                        // Skip this block's own anchor obstacle.
-                        if (p.Members.Count == 0
-                            && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
-                            && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
-                            continue;
+                    // Skip this block's own anchor obstacle.
+                    if (p.Members.Count == 0
+                        && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
+                        && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
+                        continue;
 
-                        // Use full X span regardless of left/right placement.
-                        double pXL = p.Members.Count > 0
-                            ? Math.Min(p.AnchorX, p.LabelX)
-                            : p.LabelX;
-                        double pXR = p.Members.Count > 0
-                            ? Math.Max(p.AnchorX, p.LabelX + p.LabelW)
-                            : p.LabelX + p.LabelW;
-                        if (xL < pXR && xR > pXL)
-                            list.Add(p);
-                    }
-                    return list;
+                    // Full X span: handles both right-placed and (future) left-placed blocks.
+                    double pXL = p.Members.Count > 0
+                        ? Math.Min(p.AnchorX, p.LabelX)
+                        : p.LabelX;
+                    double pXR = p.Members.Count > 0
+                        ? Math.Max(p.AnchorX, p.LabelX + p.LabelW)
+                        : p.LabelX + p.LabelW;
+                    if (blkXL < pXR && blkXR > pXL)
+                        xConflicts.Add(p);
                 }
-
-                var xConflicts = BuildConflicts(blkXL, blkXR);
-
-                double originalLabelX = blk.LabelX;
-                double originalLabelY = blk.LabelY;
 
                 if (xConflicts.Count > 0)
                 {
                     double maxDisp = Math.Max(medianNN * 2.0, blk.BlockH * 1.5);
-
-                    // ── Right-side placement (default) ────────────────────────
                     double clearY = FindClearY(
                         blk.LabelY, blk.BlockH,
                         blk.AnchorX, blk.AnchorY, blk.LabelX,
                         xConflicts, labelH, maxDisp);
-                    double disp = Math.Abs(clearY - blk.LabelY);
-
-                    // ── Left-side fallback ────────────────────────────────────
-                    // If right-side pushes us beyond half of maxDisp, also try
-                    // placing the label to the left of the anchor.
-                    // Left label column: [anchorX - anchorGap - LabelW, anchorX - anchorGap]
-                    // Leader corridor:   [anchorX - anchorGap, anchorX]
-                    // Pass corridor ends as anchorX/labelX to FindClearY so the
-                    // existing leader-clear check covers the right span.
-                    if (disp > maxDisp * 0.5)
+                    if (Math.Abs(clearY - blk.LabelY) > 1e-9)
                     {
-                        double leftLabelX = blk.AnchorX - anchorGap - blk.LabelW;
-                        var leftConflicts = BuildConflicts(leftLabelX, blk.AnchorX);
-
-                        double leftClearY = FindClearY(
-                            blk.LabelY, blk.BlockH,
-                            blk.AnchorX - anchorGap, blk.AnchorY, blk.AnchorX,
-                            leftConflicts, labelH, maxDisp);
-
-                        if (Math.Abs(leftClearY - blk.LabelY) < disp)
-                        {
-                            clearY      = leftClearY;
-                            blk.LabelX  = leftLabelX;
-                            disp        = Math.Abs(clearY - blk.LabelY);
-                        }
+                        blk.LabelY = clearY;
+                        nudged++;
                     }
-
-                    blk.LabelY = clearY;
                 }
-
-                if (Math.Abs(blk.LabelY - originalLabelY) > 1e-9 ||
-                    Math.Abs(blk.LabelX - originalLabelX) > 1e-9)
-                    nudged++;
 
                 placed.Add(blk);
                 IndexAdd(blk);
@@ -466,17 +428,26 @@ namespace LabelPlacer.Civil3D
             double eps = labelH * 0.05;
             double mr  = labelH * 0.44; // ≈ AnchorMarkerSize/2 relative to labelH
 
-            // ── Occupied Y intervals (text + leader + anchor extent of each placed block) ──
-            var occupied = new List<(double lo, double hi)>(conflicts.Count);
+            // ── Occupied Y intervals ──────────────────────────────────────────────────────
+            // A displaced block's label text and its anchor marker are treated as two
+            // SEPARATE obstacles.  Merging them into one big interval would falsely
+            // block the gap between a far-displaced label and its anchor, making it
+            // impossible for other blocks to use that space.
+            var occupied = new List<(double lo, double hi)>(conflicts.Count * 2);
             foreach (var c in conflicts)
             {
-                double yLo = c.Members.Count > 0
-                    ? Math.Min(c.AnchorY - mr, c.LabelY)
-                    : c.LabelY;
-                double yHi = c.Members.Count > 0
-                    ? Math.Max(c.AnchorY + mr, c.LabelY + c.BlockH)
-                    : c.LabelY + c.BlockH;
-                occupied.Add((yLo - eps, yHi + eps));
+                if (c.Members.Count > 0)
+                {
+                    // Label text block
+                    occupied.Add((c.LabelY - eps, c.LabelY + c.BlockH + eps));
+                    // Anchor marker (may be far from the text if the block was displaced)
+                    occupied.Add((c.AnchorY - mr - eps, c.AnchorY + mr + eps));
+                }
+                else
+                {
+                    // Pure anchor obstacle
+                    occupied.Add((c.LabelY - eps, c.LabelY + c.BlockH + eps));
+                }
             }
 
             // ── Leader corridor check ─────────────────────────────────────────────────────
