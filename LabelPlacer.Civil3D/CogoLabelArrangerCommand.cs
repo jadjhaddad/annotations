@@ -132,7 +132,7 @@ namespace LabelPlacer.Civil3D
 
             double labelW    = LabelW;
             double labelH    = LabelH;
-            double anchorGap = labelH * 2.0;    // clear the point marker (2× label height)
+            double anchorGap = labelH * 3.5;    // clear the point marker (3.5× label height)
             double rowSpacing = labelH * 1.1;   // label height + 10% gap between rows
 
             ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}\n");
