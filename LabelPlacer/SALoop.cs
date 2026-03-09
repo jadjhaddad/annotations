@@ -512,7 +512,6 @@ public sealed class SALoop
         var blockLabels = new List<LabelState>(blocks.Count);
         foreach (LabelBlock b in blocks) blockLabels.Add(b.Block);
 
-        // Always build anchor order — soft ordering penalty applies regardless of EnforceAnchorOrder.
         int[] order = BuildAnchorOrder(blockLabels);
         // nextConstraintRank[k] = first rank j > k where anchor Y differs from rank k.
         // This ensures every block has an ordering constraint even when consecutive
@@ -965,7 +964,6 @@ public sealed class SALoop
             MaxVerticalDisplacementFactor = cfg.MaxVerticalDisplacementFactor,
             MaxBlockDisplacementFactor = cfg.MaxBlockDisplacementFactor,
             StackLabelsByAnchor = cfg.StackLabelsByAnchor,
-            EnforceAnchorOrder = cfg.EnforceAnchorOrder,
             LineSpacingFactor = cfg.LineSpacingFactor,
             CharWidthFactor = cfg.CharWidthFactor,
             SizeSafetyFactorX = cfg.SizeSafetyFactorX,

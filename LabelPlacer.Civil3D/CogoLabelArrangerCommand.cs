@@ -520,26 +520,6 @@ namespace LabelPlacer.Civil3D
             return false;
         }
 
-        private static double GetAnnotationScale(Document doc)
-        {
-            try
-            {
-                var val = Autodesk.AutoCAD.ApplicationServices.Application
-                              .GetSystemVariable("CANNOSCALEVALUE");
-                double ratio = Convert.ToDouble(val);
-                if (ratio > 1e-12) return 1.0 / ratio;
-            }
-            catch { }
-            try
-            {
-                var ocm = doc.Database.ObjectContextManager;
-                var occ = ocm?.GetContextCollection("ACDB_ANNOTATIONSCALES");
-                if (occ?.CurrentContext is AnnotationScale s && s.PaperUnits > 0)
-                    return s.DrawingUnits / s.PaperUnits;
-            }
-            catch { }
-            return 1.0;
-        }
     }
 
     /// <summary>

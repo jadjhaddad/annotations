@@ -77,13 +77,6 @@ public sealed class PlacerConfig
     public bool StackLabelsByAnchor { get; set; } = true;
 
     /// <summary>
-    /// If true, stacked blocks must preserve anchor-Y order (no vertical crossing).
-    /// Deprecated: soft ordering via <see cref="OrderingPenaltyWeight"/> is now always
-    /// applied when <see cref="StackLabelsByAnchor"/> is true. This flag is ignored.
-    /// </summary>
-    public bool EnforceAnchorOrder { get; set; } = false;
-
-    /// <summary>
     /// Energy penalty per world-unit of block-center crossing in Stage A.
     /// A small value (≪ Alpha) gently steers Stage A toward ordering-friendly
     /// solutions without blocking overlap clearing.
