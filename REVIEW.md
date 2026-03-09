@@ -266,7 +266,6 @@ double rowSpacing = labelH * 1.1;             // = 1.87 units per row
 ```
 
 - [ ] ⚠️ **These must be re-measured with `DIST` in Civil 3D if the label style or annotation scale changes.** The algorithm will produce wrong results silently if these are stale.
-- [ ] The unused `GetAnnotationScale()` helper exists for future use when auto-scaling label dimensions.
 
 ---
 
@@ -305,8 +304,6 @@ The `LabelPlacer` library's `GreedyPlacer` + `SALoop` are **not wired up** in th
 - [ ] **Leader-through-anchor collisions** — the anchor marker obstacle in the index has a fixed size (`AnchorMarkerSize`), but Civil 3D renders a visual marker that may be slightly larger. A small tolerance bump on `mr` could reduce visual overlap.
 
 - [ ] **Hardcoded dimensions** — `LabelW`, `LabelH`, `AnchorMarkerSize` must be manually updated if label style or scale changes.
-
-- [ ] **`GetAnnotationScale()` is unused** — written but never called. Either wire it up to scale dimensions dynamically or remove it.
 
 - [ ] **`ArrangeCogoAll` has duplicate logging setup** — writes a header line before `StackLabels` rewrites the log. Minor duplication.
 
