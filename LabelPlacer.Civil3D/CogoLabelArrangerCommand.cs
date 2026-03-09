@@ -103,15 +103,36 @@ namespace LabelPlacer.Civil3D
             int n = pts.Count;
             if (n == 0) { ed.WriteMessage("\nNo COGO points found.\n"); return; }
 
-            // ── Median nearest-neighbour (skip exact duplicates) ──────────────
-            var nnDists = new List<double>(n);
-            for (int i = 0; i < n; i++)
+            // ── Sort by X — used by both NN and co-location passes ────────────
+            var byX = new List<int>(n);
+            for (int i = 0; i < n; i++) byX.Add(i);
+            byX.Sort((a, b) => pts[a].x.CompareTo(pts[b].x));
+
+            // ── Median nearest-neighbour  O(n log n) sliding window ───────────
+            // For each point scan only right-neighbours until the X gap alone
+            // exceeds the current best distance, then mirror left.
+            // Sample every k-th point (max 500 samples) for a fast median estimate.
+            int sampleStep = Math.Max(1, n / 500);
+            var nnDists = new List<double>((n + sampleStep - 1) / sampleStep);
+            for (int si = 0; si < byX.Count; si += sampleStep)
             {
+                int i = byX[si];
                 double bestSq = double.MaxValue;
-                for (int j = 0; j < n; j++)
+                for (int k = si + 1; k < byX.Count; k++)
                 {
-                    if (i == j) continue;
-                    double dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+                    int j = byX[k];
+                    double dx = pts[j].x - pts[i].x;
+                    if (dx * dx >= bestSq) break;
+                    double dy = pts[i].y - pts[j].y;
+                    double sq = dx * dx + dy * dy;
+                    if (sq > 1e-12 && sq < bestSq) bestSq = sq;
+                }
+                for (int k = si - 1; k >= 0; k--)
+                {
+                    int j = byX[k];
+                    double dx = pts[i].x - pts[j].x;
+                    if (dx * dx >= bestSq) break;
+                    double dy = pts[i].y - pts[j].y;
                     double sq = dx * dx + dy * dy;
                     if (sq > 1e-12 && sq < bestSq) bestSq = sq;
                 }
@@ -138,19 +159,28 @@ namespace LabelPlacer.Civil3D
 
             ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
-            // ── Phase 1: Group co-located anchors (same physical point) ───────
+            // ── Phase 1: Group co-located anchors  O(n log n) sliding window ──
             // Points within 10% of medianNN are treated as one stacked entity.
-            double colocSq = Math.Pow(medianNN * 0.1, 2);
+            // byX is already sorted — only scan right-neighbours until X gap
+            // alone exceeds the co-location threshold.
+            double colocThresh = medianNN * 0.1;
+            double colocSq     = colocThresh * colocThresh;
             int[] par = new int[n];
             for (int i = 0; i < n; i++) par[i] = i;
             int Find(int x) { while (par[x] != x) { par[x] = par[par[x]]; x = par[x]; } return x; }
 
-            for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
+            for (int si = 0; si < byX.Count; si++)
             {
-                double dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
-                if (dx * dx + dy * dy <= colocSq)
-                { int ri = Find(i), rj = Find(j); if (ri != rj) par[rj] = ri; }
+                int i = byX[si];
+                for (int sk = si + 1; sk < byX.Count; sk++)
+                {
+                    int j = byX[sk];
+                    double dx = pts[j].x - pts[i].x;
+                    if (dx > colocThresh) break;
+                    double dy = pts[i].y - pts[j].y;
+                    if (dx * dx + dy * dy <= colocSq)
+                    { int ri = Find(i), rj = Find(j); if (ri != rj) par[rj] = ri; }
+                }
             }
 
             var groupMap = new Dictionary<int, List<int>>();
