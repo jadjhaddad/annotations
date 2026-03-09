@@ -238,6 +238,13 @@ namespace LabelPlacer.Civil3D
                 double blkXR = blk.LabelX + blk.LabelW;
                 foreach (var p in placed)
                 {
+                    // Skip this block's own anchor obstacle — the label is allowed to
+                    // sit at its anchor's Y; only other anchors are obstacles.
+                    if (p.Members.Count == 0
+                        && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
+                        && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
+                        continue;
+
                     double pXL = p.Members.Count > 0 ? p.AnchorX : p.LabelX;
                     double pXR = p.LabelX + p.LabelW;
                     if (blkXL < pXR && blkXR > pXL)
@@ -246,10 +253,14 @@ namespace LabelPlacer.Civil3D
 
                 if (xConflicts.Count > 0)
                 {
+                    // Cap displacement: larger of 2× medianNN or 1.5× blockH.
+                    // This prevents cascade long-leaders while giving dense groups
+                    // enough room to avoid the triple-overlap fallback.
+                    double maxDisp = Math.Max(medianNN * 2.0, blk.BlockH * 1.5);
                     double clearY = FindClearY(
                         blk.LabelY, blk.BlockH,
                         blk.AnchorX, blk.AnchorY, blk.LabelX,
-                        xConflicts, labelH);
+                        xConflicts, labelH, maxDisp);
                     if (Math.Abs(clearY - blk.LabelY) > 1e-9)
                     {
                         blk.LabelY = clearY;
@@ -295,9 +306,11 @@ namespace LabelPlacer.Civil3D
         /// <param name="anchorX">X of this block's anchor (left edge of leader).</param>
         /// <param name="anchorY">Y of this block's anchor.</param>
         /// <param name="labelX">X of this block's label column (right edge of leader / left edge of text).</param>
+        /// <param name="maxDisp">Maximum displacement from startY before falling back.</param>
         private static double FindClearY(double startY, double blockH,
                                          double anchorX, double anchorY, double labelX,
-                                         List<LabelBlock> conflicts, double labelH)
+                                         List<LabelBlock> conflicts, double labelH,
+                                         double maxDisp = double.MaxValue)
         {
             double eps = labelH * 0.05;
             double mr  = labelH * 0.44; // ≈ AnchorMarkerSize/2 relative to labelH
@@ -352,13 +365,24 @@ namespace LabelPlacer.Civil3D
             }
             candidates.Sort((a, b) => Math.Abs(a - startY).CompareTo(Math.Abs(b - startY)));
 
-            // Pass 1: text clear AND leader corridor clear (ideal — no crossing).
+            // Pass 1: within maxDisp, text clear AND leader corridor clear (ideal).
+            foreach (double cand in candidates)
+                if (Math.Abs(cand - startY) <= maxDisp
+                    && !OverlapsAny(cand, cand + blockH, occupied) && LeaderClear(cand))
+                    return cand;
+
+            // Pass 2: within maxDisp, text clear only (leader may cross).
+            foreach (double cand in candidates)
+                if (Math.Abs(cand - startY) <= maxDisp
+                    && !OverlapsAny(cand, cand + blockH, occupied))
+                    return cand;
+
+            // Pass 3: unlimited, text clear AND leader clear (long leader but no text overlap).
             foreach (double cand in candidates)
                 if (!OverlapsAny(cand, cand + blockH, occupied) && LeaderClear(cand))
                     return cand;
 
-            // Pass 2: text clear only (leader may cross in very dense areas).
-            // Always prefer this over falling back to startY (which causes text-on-text overlap).
+            // Pass 4: unlimited, text clear only — always avoid text-on-text overlap.
             foreach (double cand in candidates)
                 if (!OverlapsAny(cand, cand + blockH, occupied))
                     return cand;
