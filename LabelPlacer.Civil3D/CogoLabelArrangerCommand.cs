@@ -125,15 +125,16 @@ namespace LabelPlacer.Civil3D
             medianNN = Math.Max(medianNN, 0.001);
 
             // ── Sizing ────────────────────────────────────────────────────────
-            // Label dimensions measured directly in Civil 3D with DIST (drawing units).
-            // Update these two constants if the label style or scale changes.
-            const double LabelW = 7.8;
-            const double LabelH = 1.7;
+            // All dimensions measured directly in Civil 3D with DIST (drawing units).
+            // Update these constants if the label style or scale changes.
+            const double LabelW        = 7.8;
+            const double LabelH        = 1.7;
+            const double AnchorMarkerSize = 1.5;  // anchor marker width and height
 
-            double labelW    = LabelW;
-            double labelH    = LabelH;
-            double anchorGap = labelH * 3.5;    // clear the point marker (3.5× label height)
-            double rowSpacing = labelH * 1.1;   // label height + 10% gap between rows
+            double labelW     = LabelW;
+            double labelH     = LabelH;
+            double anchorGap  = AnchorMarkerSize * 1.2;  // marker width + 20% visual clearance
+            double rowSpacing = labelH * 1.1;            // label height + 10% gap
 
             ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
@@ -204,17 +205,35 @@ namespace LabelPlacer.Civil3D
             }
 
             // ── Phase 4: Greedy Y deconfliction ──────────────────────────────
-            var placed = new List<LabelBlock>(blocks.Count);
+            // Pre-populate placed with anchor marker obstacles (immovable).
+            // Each co-location group contributes one obstacle centred on its anchor.
+            double mr = AnchorMarkerSize / 2.0;
+            var placed = new List<LabelBlock>(blocks.Count * 2);
+            foreach (var blk in blocks)
+            {
+                placed.Add(new LabelBlock
+                {
+                    Members = new List<int>(),          // no labels — obstacle only
+                    AnchorX = blk.AnchorX,
+                    AnchorY = blk.AnchorY,
+                    LabelX  = blk.AnchorX - mr,        // centred on anchor
+                    LabelY  = blk.AnchorY - mr,
+                    BlockH  = AnchorMarkerSize,
+                    LabelH  = AnchorMarkerSize,
+                    LabelW  = AnchorMarkerSize,
+                });
+            }
+
             int nudged = 0;
 
             foreach (int bi in order)
             {
                 LabelBlock blk = blocks[bi];
 
-                // Collect already-placed blocks whose X range overlaps this one
+                // Proper rectangle X-intersection (handles mixed label/obstacle widths)
                 var xConflicts = new List<LabelBlock>();
                 foreach (var p in placed)
-                    if (Math.Abs(p.LabelX - blk.LabelX) < (p.LabelW + blk.LabelW) / 2.0)
+                    if (blk.LabelX < p.LabelX + p.LabelW && blk.LabelX + blk.LabelW > p.LabelX)
                         xConflicts.Add(p);
 
                 if (xConflicts.Count > 0)
@@ -238,6 +257,7 @@ namespace LabelPlacer.Civil3D
             {
                 foreach (var blk in placed)
                 {
+                    if (blk.Members.Count == 0) continue;  // anchor obstacle — nothing to write
                     for (int slot = 0; slot < blk.Members.Count; slot++)
                     {
                         var pt = tr.GetObject(pts[blk.Members[slot]].id, OpenMode.ForWrite) as CogoPoint;
