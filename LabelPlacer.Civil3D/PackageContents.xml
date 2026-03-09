@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage
+  SchemaVersion="1.0"
+  Version="1.0.0"
+  ProductCode="{B4E2F1A3-C6D5-4E78-9012-ABCDEF123456}"
+  Name="LabelPlacer"
+  Description="COGO Label Placer — automatic label deconfliction for Civil 3D"
+  Author="DAR">
+
+  <CompanyDetails Name="DAR" />
+
+  <Components Description="Civil 3D command module">
+    <RuntimeRequirements OS="Win64" Platform="Civil3D" SeriesMin="R24.0" SeriesMax="*" />
+    <ComponentEntry AppName="LabelPlacer"
+                    Version="1.0.0"
+                    ModuleName="./Contents/LabelPlacer.Civil3D.dll"
+                    AppDescription="COGO Label Placer" />
+  </Components>
+
+</ApplicationPackage>

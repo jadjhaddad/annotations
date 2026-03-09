@@ -317,34 +317,77 @@ namespace LabelPlacer.Civil3D
                 double blkXL = blk.AnchorX;
                 double blkXR = blk.LabelX + blk.LabelW;
 
-                var xConflicts = new List<LabelBlock>();
-                foreach (var p in IndexQuery(blkXL, blkXR))
+                List<LabelBlock> BuildConflicts(double xL, double xR)
                 {
-                    // Skip this block's own anchor obstacle.
-                    if (p.Members.Count == 0
-                        && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
-                        && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
-                        continue;
+                    var list = new List<LabelBlock>();
+                    foreach (var p in IndexQuery(xL, xR))
+                    {
+                        // Skip this block's own anchor obstacle.
+                        if (p.Members.Count == 0
+                            && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
+                            && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
+                            continue;
 
-                    double pXL = p.Members.Count > 0 ? p.AnchorX : p.LabelX;
-                    double pXR = p.LabelX + p.LabelW;
-                    if (blkXL < pXR && blkXR > pXL)
-                        xConflicts.Add(p);
+                        // Use full X span regardless of left/right placement.
+                        double pXL = p.Members.Count > 0
+                            ? Math.Min(p.AnchorX, p.LabelX)
+                            : p.LabelX;
+                        double pXR = p.Members.Count > 0
+                            ? Math.Max(p.AnchorX, p.LabelX + p.LabelW)
+                            : p.LabelX + p.LabelW;
+                        if (xL < pXR && xR > pXL)
+                            list.Add(p);
+                    }
+                    return list;
                 }
+
+                var xConflicts = BuildConflicts(blkXL, blkXR);
+
+                double originalLabelX = blk.LabelX;
+                double originalLabelY = blk.LabelY;
 
                 if (xConflicts.Count > 0)
                 {
                     double maxDisp = Math.Max(medianNN * 2.0, blk.BlockH * 1.5);
+
+                    // ── Right-side placement (default) ────────────────────────
                     double clearY = FindClearY(
                         blk.LabelY, blk.BlockH,
                         blk.AnchorX, blk.AnchorY, blk.LabelX,
                         xConflicts, labelH, maxDisp);
-                    if (Math.Abs(clearY - blk.LabelY) > 1e-9)
+                    double disp = Math.Abs(clearY - blk.LabelY);
+
+                    // ── Left-side fallback ────────────────────────────────────
+                    // If right-side pushes us beyond half of maxDisp, also try
+                    // placing the label to the left of the anchor.
+                    // Left label column: [anchorX - anchorGap - LabelW, anchorX - anchorGap]
+                    // Leader corridor:   [anchorX - anchorGap, anchorX]
+                    // Pass corridor ends as anchorX/labelX to FindClearY so the
+                    // existing leader-clear check covers the right span.
+                    if (disp > maxDisp * 0.5)
                     {
-                        blk.LabelY = clearY;
-                        nudged++;
+                        double leftLabelX = blk.AnchorX - anchorGap - blk.LabelW;
+                        var leftConflicts = BuildConflicts(leftLabelX, blk.AnchorX);
+
+                        double leftClearY = FindClearY(
+                            blk.LabelY, blk.BlockH,
+                            blk.AnchorX - anchorGap, blk.AnchorY, blk.AnchorX,
+                            leftConflicts, labelH, maxDisp);
+
+                        if (Math.Abs(leftClearY - blk.LabelY) < disp)
+                        {
+                            clearY      = leftClearY;
+                            blk.LabelX  = leftLabelX;
+                            disp        = Math.Abs(clearY - blk.LabelY);
+                        }
                     }
+
+                    blk.LabelY = clearY;
                 }
+
+                if (Math.Abs(blk.LabelY - originalLabelY) > 1e-9 ||
+                    Math.Abs(blk.LabelX - originalLabelX) > 1e-9)
+                    nudged++;
 
                 placed.Add(blk);
                 IndexAdd(blk);
@@ -374,31 +417,30 @@ namespace LabelPlacer.Civil3D
                 }
             }
 
-            const int BatchSize = 500;
             int moved = 0;
             doc.Database.DisableUndoRecording(true);
+            doc.Database.UpdateExt(false);
             try
             {
-                for (int start = 0; start < writes.Count; start += BatchSize)
+                using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
                 {
-                    int end = Math.Min(start + BatchSize, writes.Count);
-                    using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
+                    for (int wi = 0; wi < writes.Count; wi++)
                     {
-                        for (int wi = start; wi < end; wi++)
-                        {
-                            var w  = writes[wi];
-                            var pt = tr.GetObject(w.id, OpenMode.ForWrite) as CogoPoint;
-                            if (pt == null) continue;
-                            pt.LabelLocation = new Point3d(w.x, w.y, pt.Location.Z);
-                            moved++;
-                        }
-                        tr.Commit();
+                        var w  = writes[wi];
+                        var pt = tr.GetObject(w.id, OpenMode.ForWrite) as CogoPoint;
+                        if (pt == null) continue;
+                        pt.LabelLocation = new Point3d(w.x, w.y, pt.Location.Z);
+                        moved++;
+                        if ((wi + 1) % 500 == 0)
+                            Tick($"  ...{wi + 1}/{writes.Count} labels written");
                     }
-                    Tick($"  ...{Math.Min(end, writes.Count)}/{writes.Count} labels written");
+                    tr.Commit();
                 }
+                Tick($"  ...{writes.Count}/{writes.Count} labels written");
             }
             finally
             {
+                doc.Database.UpdateExt(true);
                 doc.Database.DisableUndoRecording(false);
             }
 

@@ -13,6 +13,9 @@ snapshots*.csv
 ## Local logs
 *.log
 
+## Autodesk bundle deployment (user-local, not source-controlled)
+*.bundle/
+
 ## OS/editor noise
 .DS_Store
 Thumbs.db
