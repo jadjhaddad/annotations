@@ -238,13 +238,6 @@ namespace LabelPlacer.Civil3D
                 double blkXR = blk.LabelX + blk.LabelW;
                 foreach (var p in placed)
                 {
-                    // Skip this block's own anchor obstacle — a label is allowed to
-                    // sit at its own anchor's Y; only other anchors are obstacles.
-                    if (p.Members.Count == 0
-                        && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
-                        && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
-                        continue;
-
                     double pXL = p.Members.Count > 0 ? p.AnchorX : p.LabelX;
                     double pXR = p.LabelX + p.LabelW;
                     if (blkXL < pXR && blkXR > pXL)
