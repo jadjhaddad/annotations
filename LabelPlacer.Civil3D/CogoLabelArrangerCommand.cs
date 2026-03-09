@@ -86,9 +86,14 @@ namespace LabelPlacer.Civil3D
 
         private static void StackLabels(Document doc, Editor ed, ObjectId[] pointIds)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            void Tick(string phase) =>
+                ed.WriteMessage($"  [{sw.Elapsed:mm\\:ss\\.f}] {phase}\n");
+
             ed.WriteMessage($"\nProcessing {pointIds.Length} point(s)...\n");
 
             // ── Read anchor positions ─────────────────────────────────────────
+            Tick("Reading anchor positions...");
             var pts = new List<(ObjectId id, double x, double y)>();
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
@@ -102,6 +107,7 @@ namespace LabelPlacer.Civil3D
 
             int n = pts.Count;
             if (n == 0) { ed.WriteMessage("\nNo COGO points found.\n"); return; }
+            Tick($"Read {n} points.");
 
             // ── Sort by X — used by both NN and co-location passes ────────────
             var byX = new List<int>(n);
@@ -157,7 +163,7 @@ namespace LabelPlacer.Civil3D
             double anchorGap  = AnchorMarkerSize * 1.5;  // marker width + 50% visual clearance
             double rowSpacing = labelH * 1.1;            // label height + 10% gap
 
-            ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}\n");
+            Tick($"medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}");
 
             // ── Phase 1: Group co-located anchors  O(n log n) sliding window ──
             // Points within 10% of medianNN are treated as one stacked entity.
@@ -220,7 +226,7 @@ namespace LabelPlacer.Civil3D
                 });
             }
 
-            ed.WriteMessage($"  {blocks.Count} block(s) after co-location grouping\n");
+            Tick($"Co-location done: {blocks.Count} block(s).");
 
             // ── Phase 3: Middle-out processing order by LabelX ───────────────
             // Process the X-centre block first so the densest area gets priority
@@ -255,10 +261,16 @@ namespace LabelPlacer.Civil3D
             }
 
             int nudged = 0;
+            int processed = 0;
+            int deconflictStep = Math.Max(1, blocks.Count / 10); // report every 10%
+            Tick($"Deconfliction starting ({blocks.Count} blocks)...");
 
             foreach (int bi in order)
             {
                 LabelBlock blk = blocks[bi];
+                processed++;
+                if (processed % deconflictStep == 0)
+                    Tick($"  ...{processed}/{blocks.Count} blocks processed");
 
                 // X collision rectangle:
                 //   Label blocks  → [AnchorX, LabelX + LabelW]  covers leader + text
@@ -301,9 +313,10 @@ namespace LabelPlacer.Civil3D
                 placed.Add(blk);
             }
 
-            ed.WriteMessage($"  {nudged} block(s) nudged for Y clearance\n");
+            Tick($"Deconfliction done: {nudged} block(s) nudged.");
 
             // ── Phase 5: Write LabelLocations ────────────────────────────────
+            Tick("Writing label positions...");
             int moved = 0;
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
