@@ -353,29 +353,58 @@ namespace LabelPlacer.Civil3D
             Tick($"Deconfliction done: {nudged} block(s) nudged.");
 
             // ── Phase 5: Write LabelLocations ────────────────────────────────
+            // Bulk-write strategy:
+            //   • Disable undo recording to eliminate per-write journal overhead.
+            //   • Commit in batches of 500 so Civil 3D processes changes
+            //     incrementally rather than all 13k objects at once.
             Tick("Writing label positions...");
-            int moved = 0;
-            using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
+
+            // Flatten blocks → (ObjectId, x, y) write list
+            var writes = new List<(ObjectId id, double x, double y, double z)>(n);
+            foreach (var blk in placed)
             {
-                foreach (var blk in placed)
+                if (blk.Members.Count == 0) continue;
+                for (int slot = 0; slot < blk.Members.Count; slot++)
                 {
-                    if (blk.Members.Count == 0) continue;  // anchor obstacle — nothing to write
-                    for (int slot = 0; slot < blk.Members.Count; slot++)
-                    {
-                        var pt = tr.GetObject(pts[blk.Members[slot]].id, OpenMode.ForWrite) as CogoPoint;
-                        if (pt == null) continue;
-                        pt.LabelLocation = new Point3d(
-                            blk.LabelX,
-                            blk.LabelY + slot * blk.LabelH,
-                            pt.Location.Z);
-                        moved++;
-                    }
+                    var entry = pts[blk.Members[slot]];
+                    writes.Add((entry.id,
+                                blk.LabelX,
+                                blk.LabelY + slot * blk.LabelH,
+                                0));           // Z filled in from pt.Location.Z below
                 }
-                tr.Commit();
+            }
+
+            const int BatchSize = 500;
+            int moved = 0;
+            doc.Database.DisableUndoRecording(true);
+            try
+            {
+                for (int start = 0; start < writes.Count; start += BatchSize)
+                {
+                    int end = Math.Min(start + BatchSize, writes.Count);
+                    using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
+                    {
+                        for (int wi = start; wi < end; wi++)
+                        {
+                            var w  = writes[wi];
+                            var pt = tr.GetObject(w.id, OpenMode.ForWrite) as CogoPoint;
+                            if (pt == null) continue;
+                            pt.LabelLocation = new Point3d(w.x, w.y, pt.Location.Z);
+                            moved++;
+                        }
+                        tr.Commit();
+                    }
+                    Tick($"  ...{Math.Min(end, writes.Count)}/{writes.Count} labels written");
+                }
+            }
+            finally
+            {
+                doc.Database.DisableUndoRecording(false);
             }
 
             Autodesk.AutoCAD.ApplicationServices.Application.UpdateScreen();
             doc.Editor.Regen();
+            Tick($"Done — moved {moved} label(s).");
             ed.WriteMessage($"\nCOGO label stacking complete — moved {moved} label(s).\n");
         }
 
