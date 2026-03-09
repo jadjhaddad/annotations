@@ -52,8 +52,10 @@ namespace LabelPlacer.Civil3D
         [CommandMethod("ArrangeCogoAll")]
         public void ArrangeCogoAll()
         {
-            Document  doc = Application.DocumentManager.MdiActiveDocument;
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            doc.Editor.WriteMessage("\n[ArrangeCogoAll] Collecting points...\n");
             ObjectId[] ids = CollectAllPoints(doc, doc.Editor);
+            doc.Editor.WriteMessage($"\n[ArrangeCogoAll] Collected {ids?.Length ?? 0} points.\n");
             if (ids != null && ids.Length > 0) StackLabels(doc, doc.Editor, ids);
         }
 
@@ -71,6 +73,7 @@ namespace LabelPlacer.Civil3D
 
         private static ObjectId[] CollectAllPoints(Document doc, Editor ed)
         {
+            ed.WriteMessage("  Enumerating CogoPoints collection...\n");
             var ids = new List<ObjectId>();
             using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
             {
