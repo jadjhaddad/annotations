@@ -132,9 +132,10 @@ namespace LabelPlacer.Civil3D
 
             double labelW    = LabelW;
             double labelH    = LabelH;
-            double anchorGap = medianNN * 0.3;  // small gap from anchor to label left edge
+            double anchorGap = labelH * 2.0;    // clear the point marker (2× label height)
+            double rowSpacing = labelH * 1.1;   // label height + 10% gap between rows
 
-            ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}\n");
+            ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}\n");
 
             // ── Phase 1: Group co-located anchors (same physical point) ───────
             // Points within 10% of medianNN are treated as one stacked entity.
@@ -173,7 +174,7 @@ namespace LabelPlacer.Civil3D
                     sumY += pts[i].y;
                 }
                 double centroidY = sumY / members.Count;
-                double blockH    = members.Count * labelH;
+                double blockH    = members.Count * rowSpacing;
 
                 blocks.Add(new LabelBlock
                 {
@@ -183,7 +184,7 @@ namespace LabelPlacer.Civil3D
                     LabelX   = maxAnchorX + anchorGap,
                     LabelY   = centroidY - blockH / 2.0,  // bottom of block, Y-up coords
                     BlockH   = blockH,
-                    LabelH   = labelH,
+                    LabelH   = rowSpacing,
                     LabelW   = labelW,
                 });
             }
