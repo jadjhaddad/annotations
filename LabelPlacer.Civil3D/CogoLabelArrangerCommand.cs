@@ -245,9 +245,31 @@ namespace LabelPlacer.Civil3D
             // Each co-location group contributes one obstacle centred on its anchor.
             double mr = AnchorMarkerSize / 2.0;
             var placed = new List<LabelBlock>(blocks.Count * 2);
+
+            // ── Spatial bucket index for O(1) X-conflict lookup ───────────────
+            // Each block is stored in ONE bucket keyed by floor(AnchorX / bucketW).
+            // When querying, we check the 3 buckets covering [blkXL-bucketW, blkXR].
+            double bucketW = labelW + anchorGap + AnchorMarkerSize; // ≈ 11.55 — wider than any block
+            var xIndex = new Dictionary<int, List<LabelBlock>>();
+            void IndexAdd(LabelBlock b)
+            {
+                int key = (int)Math.Floor(b.AnchorX / bucketW);
+                if (!xIndex.TryGetValue(key, out var lst)) xIndex[key] = lst = new List<LabelBlock>();
+                lst.Add(b);
+            }
+            List<LabelBlock> IndexQuery(double xL, double xR)
+            {
+                int k0 = (int)Math.Floor((xL - bucketW) / bucketW);
+                int k1 = (int)Math.Floor( xR            / bucketW);
+                var result = new List<LabelBlock>();
+                for (int k = k0; k <= k1; k++)
+                    if (xIndex.TryGetValue(k, out var lst)) result.AddRange(lst);
+                return result;
+            }
+
             foreach (var blk in blocks)
             {
-                placed.Add(new LabelBlock
+                var obs = new LabelBlock
                 {
                     Members = new List<int>(),          // no labels — obstacle only
                     AnchorX = blk.AnchorX,
@@ -257,7 +279,9 @@ namespace LabelPlacer.Civil3D
                     BlockH  = AnchorMarkerSize,
                     LabelH  = AnchorMarkerSize,
                     LabelW  = AnchorMarkerSize,
-                });
+                };
+                placed.Add(obs);
+                IndexAdd(obs);
             }
 
             int nudged = 0;
@@ -275,13 +299,13 @@ namespace LabelPlacer.Civil3D
                 // X collision rectangle:
                 //   Label blocks  → [AnchorX, LabelX + LabelW]  covers leader + text
                 //   Anchor obstacles → [LabelX, LabelX + LabelW]  (their own marker square)
-                var xConflicts = new List<LabelBlock>();
                 double blkXL = blk.AnchorX;
                 double blkXR = blk.LabelX + blk.LabelW;
-                foreach (var p in placed)
+
+                var xConflicts = new List<LabelBlock>();
+                foreach (var p in IndexQuery(blkXL, blkXR))
                 {
-                    // Skip this block's own anchor obstacle — the label is allowed to
-                    // sit at its anchor's Y; only other anchors are obstacles.
+                    // Skip this block's own anchor obstacle.
                     if (p.Members.Count == 0
                         && Math.Abs(p.AnchorX - blk.AnchorX) < 1e-9
                         && Math.Abs(p.AnchorY - blk.AnchorY) < 1e-9)
@@ -295,9 +319,6 @@ namespace LabelPlacer.Civil3D
 
                 if (xConflicts.Count > 0)
                 {
-                    // Cap displacement: larger of 2× medianNN or 1.5× blockH.
-                    // This prevents cascade long-leaders while giving dense groups
-                    // enough room to avoid the triple-overlap fallback.
                     double maxDisp = Math.Max(medianNN * 2.0, blk.BlockH * 1.5);
                     double clearY = FindClearY(
                         blk.LabelY, blk.BlockH,
@@ -311,6 +332,7 @@ namespace LabelPlacer.Civil3D
                 }
 
                 placed.Add(blk);
+                IndexAdd(blk);
             }
 
             Tick($"Deconfliction done: {nudged} block(s) nudged.");
