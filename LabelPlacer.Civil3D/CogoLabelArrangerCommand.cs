@@ -133,7 +133,7 @@ namespace LabelPlacer.Civil3D
 
             double labelW     = LabelW;
             double labelH     = LabelH;
-            double anchorGap  = AnchorMarkerSize * 1.2;  // marker width + 20% visual clearance
+            double anchorGap  = AnchorMarkerSize * 1.5;  // marker width + 50% visual clearance
             double rowSpacing = labelH * 1.1;            // label height + 10% gap
 
             ed.WriteMessage($"  medianNN={medianNN:G4}  labelW={labelW:G4}  labelH={labelH:G4}  anchorGap={anchorGap:G4}  rowSpacing={rowSpacing:G4}\n");
@@ -230,11 +230,19 @@ namespace LabelPlacer.Civil3D
             {
                 LabelBlock blk = blocks[bi];
 
-                // Proper rectangle X-intersection (handles mixed label/obstacle widths)
+                // X collision rectangle:
+                //   Label blocks  → [AnchorX, LabelX + LabelW]  covers leader + text
+                //   Anchor obstacles → [LabelX, LabelX + LabelW]  (their own marker square)
                 var xConflicts = new List<LabelBlock>();
+                double blkXL = blk.AnchorX;
+                double blkXR = blk.LabelX + blk.LabelW;
                 foreach (var p in placed)
-                    if (blk.LabelX < p.LabelX + p.LabelW && blk.LabelX + blk.LabelW > p.LabelX)
+                {
+                    double pXL = p.Members.Count > 0 ? p.AnchorX : p.LabelX;
+                    double pXR = p.LabelX + p.LabelW;
+                    if (blkXL < pXR && blkXR > pXL)
                         xConflicts.Add(p);
+                }
 
                 if (xConflicts.Count > 0)
                 {
@@ -285,11 +293,22 @@ namespace LabelPlacer.Civil3D
                                          List<LabelBlock> conflicts, double labelH)
         {
             double eps = labelH * 0.05;
+            double mr  = labelH * 0.44; // ≈ AnchorMarkerSize/2 relative to labelH
 
-            // Build occupied intervals from X-conflicting blocks
+            // Build occupied Y intervals.
+            // For label blocks: expand to cover anchor Y so diagonal leaders are included.
+            // For anchor obstacles (Members empty): use their own marker square.
             var occupied = new List<(double lo, double hi)>(conflicts.Count);
             foreach (var c in conflicts)
-                occupied.Add((c.LabelY - eps, c.LabelY + c.BlockH + eps));
+            {
+                double yLo = c.Members.Count > 0
+                    ? Math.Min(c.AnchorY - mr, c.LabelY)
+                    : c.LabelY;
+                double yHi = c.Members.Count > 0
+                    ? Math.Max(c.AnchorY + mr, c.LabelY + c.BlockH)
+                    : c.LabelY + c.BlockH;
+                occupied.Add((yLo - eps, yHi + eps));
+            }
 
             // Quick check: is startY already clear?
             if (!OverlapsAny(startY, startY + blockH, occupied)) return startY;
