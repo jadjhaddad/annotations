@@ -246,7 +246,11 @@ namespace LabelPlacer.Civil3D
 
                 if (xConflicts.Count > 0)
                 {
-                    double clearY = FindClearY(blk.LabelY, blk.BlockH, xConflicts, labelH);
+                    // Max Y displacement from the anchor centre = 1.5 × medianNN.
+                    // This keeps leaders short; very dense areas accept overlap rather
+                    // than pushing a block far from its anchor.
+                    double maxDisp = Math.Max(medianNN * 1.5, blk.BlockH);
+                    double clearY = FindClearY(blk.LabelY, blk.BlockH, xConflicts, labelH, maxDisp);
                     if (Math.Abs(clearY - blk.LabelY) > 1e-9)
                     {
                         blk.LabelY = clearY;
@@ -289,8 +293,14 @@ namespace LabelPlacer.Civil3D
         /// Finds the Y (bottom of block) nearest to <paramref name="startY"/> that
         /// does not overlap any already-placed block in <paramref name="conflicts"/>.
         /// </summary>
+        /// <param name="maxDisp">
+        /// Maximum allowed displacement from <paramref name="startY"/>.
+        /// Candidates further away than this are skipped; if none qualify, <paramref name="startY"/>
+        /// is returned so the block stays near its anchor (accepting overlap over a long leader).
+        /// </param>
         private static double FindClearY(double startY, double blockH,
-                                         List<LabelBlock> conflicts, double labelH)
+                                         List<LabelBlock> conflicts, double labelH,
+                                         double maxDisp = double.MaxValue)
         {
             double eps = labelH * 0.05;
             double mr  = labelH * 0.44; // ≈ AnchorMarkerSize/2 relative to labelH
@@ -324,10 +334,11 @@ namespace LabelPlacer.Civil3D
             candidates.Sort((a, b) => Math.Abs(a - startY).CompareTo(Math.Abs(b - startY)));
 
             foreach (double cand in candidates)
-                if (!OverlapsAny(cand, cand + blockH, occupied))
+                if (Math.Abs(cand - startY) <= maxDisp && !OverlapsAny(cand, cand + blockH, occupied))
                     return cand;
 
-            return startY; // fallback: couldn't clear (shouldn't happen)
+            // No clear position within maxDisp — stay near anchor (accept overlap over long leader)
+            return startY;
         }
 
         private static bool OverlapsAny(double lo, double hi,
