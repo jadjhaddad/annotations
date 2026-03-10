@@ -35,19 +35,16 @@ Three commands registered via `[CommandMethod]`:
 
 ## Section 2 — `StackLabels` Core Algorithm
 
-Six phases. Runtime log written to `%USERPROFILE%\Desktop\LabelPlacer.log`.
+Six phases. Progress is written to the Civil 3D command line via `ed.WriteMessage`.
 
 ### Phase 0 — Timing / Logging
 
 ```csharp
 Stopwatch sw = ...
 void Tick(string phase) {
-    File.AppendAllText(logPath, ...);   // real-time log — ed.WriteMessage is buffered
-    ed.WriteMessage(...);
+    ed.WriteMessage($"  [{sw.Elapsed:mm\\:ss\\.f}] {phase}\n");
 }
 ```
-
-- [ ] Log path: `%USERPROFILE%\Desktop\LabelPlacer.log`. Remove or make configurable before final release.
 
 ---
 
@@ -146,10 +143,12 @@ double rowSpacing = labelH * 1.1;             // = 1.87 units per row
 
 ## Section 4 — `.bundle` Deployment
 
-- [ ] `PackageContents.xml` — targets `Platform="Civil3D"`, `SeriesMin="R24.0"`.
-- [ ] Post-build MSBuild target (`DeployBundle`) copies the DLL to `%APPDATA%\Autodesk\ApplicationPlugins\LabelPlacer.bundle\Contents\`.
+- [ ] `PackageContents.xml` — targets `Platform="Civil3D"`, `SeriesMin="R24.0"` `SeriesMax="R24.3"` (Civil 3D 2024, .NET 4.8). Declares all three commands so Civil 3D can demand-load on first invocation.
+- [ ] Post-build target (`DeployBundle`) does two things:
+  1. Assembles `bin\Debug\LabelPlacer.bundle\` — copy this folder to any machine's `%APPDATA%\Autodesk\ApplicationPlugins\` to deploy.
+  2. Auto-copies it to the local `%APPDATA%` path so Civil 3D picks it up on next launch.
 - [ ] Civil 3D auto-loads the bundle on next launch — no `NETLOAD` required.
-- [ ] `*.bundle/` is in `.gitignore` — bundle folder is user-local, not source-controlled.
+- [ ] `*.bundle/` and `**/bin/` are in `.gitignore` — build artifacts are not source-controlled.
 
 ---
 
@@ -164,16 +163,14 @@ double rowSpacing = labelH * 1.1;             // = 1.87 units per row
 
 - [ ] **Hardcoded dimensions** — `LabelW`, `LabelH`, `AnchorMarkerSize` must be manually updated if label style or scale changes.
 
-- [ ] **Log file always on Desktop** — fine for development, should be made configurable or removed for production use.
-
 ---
 
 ## Section 6 — Build & Deployment Checklist
 
 - [ ] Close Civil 3D before building (DLL will be locked otherwise → MSB3027).
 - [ ] Build: `source ~/.bashrc && vs rcb "$(wslpath -w path/to/Annotations.sln)"`
-- [ ] Bundle is auto-deployed to `%APPDATA%\Autodesk\ApplicationPlugins\LabelPlacer.bundle\` on every build.
-- [ ] Check `%USERPROFILE%\Desktop\LabelPlacer.log` after each run to verify all phases completed.
+- [ ] Bundle auto-deployed to `%APPDATA%\Autodesk\ApplicationPlugins\LabelPlacer.bundle\` on every build.
+- [ ] Monitor progress in the Civil 3D command line during a run.
 - [ ] Expected timings on 13,791 points:
   - Read: ~0.2 s
   - medianNN + co-location: ~0.3 s
