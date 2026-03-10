@@ -5,6 +5,10 @@
     sees OS=Unix and picks up the /mnt/c/ paths instead.
   -->
   <PropertyGroup Condition="'$(OS)' == 'Unix'">
+    <!-- Civil 3D Object Enabler DLLs -->
     <Civil3DOEDir>/mnt/c/Program Files/Autodesk/Civil 3D 2024 Object Enabler</Civil3DOEDir>
+    <!-- .NET Framework 4.8 reference assemblies — fixes mscorlib/System not found in OmniSharp -->
+    <TargetFrameworkRootPath>/mnt/c/Program Files (x86)/Reference Assemblies/Microsoft/Framework</TargetFrameworkRootPath>
+    <FrameworkPathOverride>/mnt/c/Program Files (x86)/Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8</FrameworkPathOverride>
   </PropertyGroup>
 </Project>
