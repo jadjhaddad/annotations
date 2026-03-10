@@ -1,20 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage
   SchemaVersion="1.0"
-  Version="1.0.0"
-  ProductCode="{B4E2F1A3-C6D5-4E78-9012-ABCDEF123456}"
+  AutodeskProduct="Civil3D"
+  ProductType="Application"
   Name="LabelPlacer"
-  Description="COGO Label Placer — automatic label deconfliction for Civil 3D"
-  Author="DAR">
+  Description="Automatic COGO point label deconfliction for Civil 3D"
+  AppVersion="1.0.0"
+  FriendlyVersion="1.0.0"
+  Author="DAR"
+  ProductCode="{B4E2F1A3-C6D5-4E78-9012-ABCDEF123456}">
 
   <CompanyDetails Name="DAR" />
 
-  <Components Description="Civil 3D command module">
-    <RuntimeRequirements OS="Win64" Platform="Civil3D" SeriesMin="R24.0" SeriesMax="*" />
+  <Components Description="Civil 3D 2024 (.NET Framework 4.8)">
+    <RuntimeRequirements OS="Win64" Platform="Civil3D"
+                         SeriesMin="R24.0" SeriesMax="R24.3"
+                         RuntimeVersion="4.8" />
     <ComponentEntry AppName="LabelPlacer"
                     Version="1.0.0"
+                    AppType=".Net"
                     ModuleName="./Contents/LabelPlacer.Civil3D.dll"
-                    AppDescription="COGO Label Placer" />
+                    AppDescription="Automatic COGO point label deconfliction"
+                    LoadOnAutoCADStartup="True">
+      <Commands GroupName="LabelPlacer">
+        <Command Global="ArrangeCogoLabels"   Local="ArrangeCogoLabels" />
+        <Command Global="ArrangeCogoSelected" Local="ArrangeCogoSelected" />
+        <Command Global="ArrangeCogoAll"      Local="ArrangeCogoAll" />
+      </Commands>
+    </ComponentEntry>
   </Components>
 
 </ApplicationPackage>
