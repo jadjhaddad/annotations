@@ -1,0 +1,19 @@
+{
+  "MsBuild": {
+    "UseBundledOnly": false,
+    "LoadProjectsOnDemand": false
+  },
+  "RoslynExtensionsOptions": {
+    "EnableAnalyzersSupport": true,
+    "EnableDecompilationSupport": true,
+    "EnableImportCompletion": true,
+    "AnalyzeOpenDocumentsOnly": false
+  },
+  "FormattingOptions": {
+    "EnableEditorConfigSupport": true,
+    "OrganizeImports": true
+  },
+  "Sdk": {
+    "IncludePrereleases": false
+  }
+}

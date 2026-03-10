@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    WSL / Linux path overrides for OmniSharp (nvim LSP).
+    Windows MSBuild uses the defaults in the .csproj; Mono/OmniSharp on Linux
+    sees OS=Unix and picks up the /mnt/c/ paths instead.
+  -->
+  <PropertyGroup Condition="'$(OS)' == 'Unix'">
+    <Civil3DOEDir>/mnt/c/Program Files/Autodesk/Civil 3D 2024 Object Enabler</Civil3DOEDir>
+  </PropertyGroup>
+</Project>
