@@ -88,15 +88,9 @@ namespace LabelPlacer.Civil3D
         private static void StackLabels(Document doc, Editor ed, ObjectId[] pointIds)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            string logPath = System.IO.Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.Desktop),
-                "LabelPlacer.log");
-            System.IO.File.WriteAllText(logPath, $"LabelPlacer started {DateTime.Now}\n");
             void Tick(string phase)
             {
-                string line = $"[{sw.Elapsed:mm\\:ss\\.f}] {phase}\n";
-                ed.WriteMessage("  " + line);
-                System.IO.File.AppendAllText(logPath, line);
+                ed.WriteMessage($"  [{sw.Elapsed:mm\\:ss\\.f}] {phase}\n");
             }
 
             ed.WriteMessage($"\nProcessing {pointIds.Length} point(s)...\n");
