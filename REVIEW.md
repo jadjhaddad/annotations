@@ -143,7 +143,7 @@ double rowSpacing = labelH * 1.1;             // = 1.87 units per row
 
 ## Section 4 — `.bundle` Deployment
 
-- [ ] `PackageContents.xml` — targets `Platform="Civil3D"`, `SeriesMin="R24.0"` `SeriesMax="R24.3"` (Civil 3D 2024, .NET 4.8). Declares all three commands so Civil 3D can demand-load on first invocation.
+- [ ] `PackageContents.xml` — targets `Platform="Civil3D"`, `SeriesMin="R24.0"` `SeriesMax="R26.0"` (Civil 3D 2024–2026). `RuntimeRequirements` declared at both the package and component level (required by the Autoloader). Declares all three commands so the DLL is demand-loaded on first invocation.
 - [ ] Post-build target (`DeployBundle`) does two things:
   1. Assembles `bin\Debug\LabelPlacer.bundle\` — copy this folder to any machine's `%APPDATA%\Autodesk\ApplicationPlugins\` to deploy.
   2. Auto-copies it to the local `%APPDATA%` path so Civil 3D picks it up on next launch.
