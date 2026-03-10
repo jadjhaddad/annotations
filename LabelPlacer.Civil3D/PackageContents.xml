@@ -12,16 +12,20 @@
 
   <CompanyDetails Name="DAR" />
 
-  <Components Description="Civil 3D 2024 (.NET Framework 4.8)">
+  <RuntimeRequirements OS="Win64" Platform="Civil3D"
+                       SeriesMin="R24.0" SeriesMax="R26.0" />
+
+  <Components Description="LabelPlacer Civil 3D Plugin">
     <RuntimeRequirements OS="Win64" Platform="Civil3D"
-                         SeriesMin="R24.0" SeriesMax="R24.3"
-                         RuntimeVersion="4.8" />
-    <ComponentEntry AppName="LabelPlacer"
-                    Version="1.0.0"
-                    AppType=".Net"
-                    ModuleName="./Contents/LabelPlacer.Civil3D.dll"
-                    AppDescription="Automatic COGO point label deconfliction"
-                    LoadOnAutoCADStartup="True">
+                         SeriesMin="R24.0" SeriesMax="R26.0" />
+
+    <ComponentEntry
+      AppName="LabelPlacer"
+      Version="1.0.0"
+      ModuleName="./Contents/LabelPlacer.Civil3D.dll"
+      AppDescription="Automatic COGO point label deconfliction"
+      LoadOnCommandInvocation="True"
+      LoadOnAutoCADStartup="False">
       <Commands GroupName="LabelPlacer">
         <Command Global="ArrangeCogoLabels"   Local="ArrangeCogoLabels" />
         <Command Global="ArrangeCogoSelected" Local="ArrangeCogoSelected" />
